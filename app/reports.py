@@ -69,7 +69,7 @@ class ReportService:
         )
 
         new_models = markdown_table(
-            ["名称", "提供商", "输入", "输出", "缓存读取"],
+            ["模型", "提供商", "输入", "输出", "缓存"],
             format_new_model_rows(
                 result.new_models,
                 limit=limit,
@@ -167,17 +167,16 @@ class ReportService:
             ],
         )
         provider_models = markdown_table(
-            ["#", "模型", "发布时间", "输入", "输出", "缓存读取"],
+            ["模型", "发布", "输入", "输出", "缓存"],
             [
                 [
-                    str(index),
                     model.name or model.id,
                     format_released_at(model.released_at),
                     price_per_million(model.input_price),
                     price_per_million(model.output_price),
                     price_per_million(model.cache_read_price),
                 ]
-                for index, model in enumerate(models[:limit], start=1)
+                for model in models[:limit]
             ],
         )
         if len(models) > limit:
@@ -261,17 +260,20 @@ def build_card(title: str, markdown: str) -> dict[str, object]:
     """
 
     return {
+        "schema": "2.0",
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "blue",
             "title": {"tag": "plain_text", "content": title},
         },
-        "elements": [
-            {
-                "tag": "markdown",
-                "content": markdown,
-            }
-        ],
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": markdown,
+                }
+            ],
+        },
     }
 
 
@@ -317,12 +319,13 @@ def format_released_at(value: int | None) -> str:
         value: Optional release timestamp.
 
     Returns:
-        Timestamp text or ``"-"``.
+        Date text or ``"-"``.
     """
 
     if value is None:
         return "-"
-    return str(value)
+    released_at = datetime.fromtimestamp(value, UTC).astimezone(BEIJING_TZ)
+    return released_at.strftime("%y-%m-%d")
 
 
 def price_per_million(value: str | None) -> str:
@@ -353,10 +356,10 @@ def format_time(value: str) -> str:
         value: ISO timestamp string.
 
     Returns:
-        Timestamp with a Beijing time suffix.
+        Short timestamp in Beijing time.
     """
 
     timestamp = datetime.fromisoformat(value)
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
-    return timestamp.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S 北京时间")
+    return timestamp.astimezone(BEIJING_TZ).strftime("%y-%m-%d %H:%M")
