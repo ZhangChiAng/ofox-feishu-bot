@@ -1,0 +1,17 @@
+[project]
+name = "ofox-feishu-bot"
+version = "0.1.0"
+description = "Feishu websocket worker for Ofox model reports"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "lark-oapi>=1.6.8",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.15.18",
+]
