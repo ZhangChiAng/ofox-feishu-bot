@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OFOX_MODELS_API_URL = "https://api.ofox.ai/v1/models"
-OFOX_DB_PATH = BASE_DIR / "data" / "ofox.sqlite3"
+OFOX_DB_PATH = BASE_DIR / "var" / "ofox.sqlite3"
 VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
 
 
@@ -27,6 +27,7 @@ class AppConfig:
         feishu_app_secret: Feishu application secret.
         ofox_models_api_url: URL for the Ofox models API.
         ofox_db_path: SQLite database path.
+        chinese_font_path: Chinese-capable font file used to render report images.
         log_level: Validated Python logging level name.
     """
 
@@ -34,6 +35,7 @@ class AppConfig:
     feishu_app_secret: str
     ofox_models_api_url: str
     ofox_db_path: Path
+    chinese_font_path: Path
     log_level: str
 
 
@@ -78,6 +80,8 @@ def load_config(
             "Missing required environment variables: " + ", ".join(missing)
         )
 
+    chinese_font_path = _get_required_file(source, "CHINESE_FONT_PATH")
+
     log_level = (_get_env(source, "LOG_LEVEL") or "INFO").upper()
     if log_level not in VALID_LOG_LEVELS:
         raise ConfigurationError(
@@ -89,6 +93,7 @@ def load_config(
         feishu_app_secret=feishu_app_secret,
         ofox_models_api_url=OFOX_MODELS_API_URL,
         ofox_db_path=OFOX_DB_PATH,
+        chinese_font_path=chinese_font_path,
         log_level=log_level,
     )
 
@@ -106,3 +111,29 @@ def _get_env(source: Mapping[str, str], key: str) -> str:
 
     value = source.get(key, "")
     return str(value).strip() if value is not None else ""
+
+
+def _get_required_file(source: Mapping[str, str], key: str) -> Path:
+    """Reads and validates a required file path environment value.
+
+    Args:
+        source: Environment mapping.
+        key: Variable name.
+
+    Returns:
+        Existing file path.
+
+    Raises:
+        ConfigurationError: If the value is missing or does not point to a file.
+    """
+
+    value = _get_env(source, key)
+    if not value:
+        raise ConfigurationError(f"Missing required environment variable: {key}")
+
+    path = Path(value)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    if not path.is_file():
+        raise ConfigurationError(f"{key} must point to an existing file")
+    return path

@@ -9,9 +9,8 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-data/*.sqlite
-data/*.sqlite3
-data/*.db
+local/
+var/
 *.log
 logs/
 
