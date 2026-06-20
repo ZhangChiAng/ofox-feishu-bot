@@ -99,7 +99,7 @@ class ModelRepository:
 
     @staticmethod
     def init_db(conn: sqlite3.Connection) -> None:
-        """Creates repository table if it does not exist.
+        """Creates repository tables if they do not exist.
 
         Args:
             conn: Open SQLite connection.
@@ -115,6 +115,13 @@ class ModelRepository:
                 input_price TEXT,
                 output_price TEXT,
                 cache_read_price TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS watched_models (
+                model_name TEXT PRIMARY KEY
             )
             """
         )
@@ -174,6 +181,82 @@ class ModelRepository:
             ],
         )
         conn.commit()
+
+    def add_watched_model(self, model_name: str) -> bool:
+        """Adds a model name to the global watch list.
+
+        Args:
+            model_name: Exact ``OfoxModel.name`` value to watch.
+
+        Returns:
+            ``True`` when inserted, ``False`` when it was already watched.
+        """
+
+        conn = self.connect()
+        try:
+            self.init_db(conn)
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO watched_models (model_name) VALUES (?)",
+                (model_name,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def remove_watched_model(self, model_name: str) -> bool:
+        """Removes a model name from the global watch list.
+
+        Args:
+            model_name: Exact ``OfoxModel.name`` value to remove.
+
+        Returns:
+            ``True`` when a row was removed, otherwise ``False``.
+        """
+
+        conn = self.connect()
+        try:
+            self.init_db(conn)
+            cursor = conn.execute(
+                "DELETE FROM watched_models WHERE model_name = ?",
+                (model_name,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def list_watched_models(self) -> list[str]:
+        """Lists watched model names in deterministic display order."""
+
+        conn = self.connect()
+        try:
+            self.init_db(conn)
+            return [
+                row["model_name"]
+                for row in conn.execute(
+                    "SELECT model_name FROM watched_models "
+                    "ORDER BY model_name COLLATE NOCASE, model_name"
+                )
+            ]
+        finally:
+            conn.close()
+
+    def clear_watched_models(self) -> int:
+        """Removes all watched model names.
+
+        Returns:
+            Number of removed watch entries.
+        """
+
+        conn = self.connect()
+        try:
+            self.init_db(conn)
+            cursor = conn.execute("DELETE FROM watched_models")
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()
 
 
 def utc_now() -> str:

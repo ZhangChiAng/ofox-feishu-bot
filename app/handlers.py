@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time as time_module
 from typing import Any
 
 import lark_oapi as lark
@@ -17,12 +19,59 @@ from app.reports import ReportService
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_MESSAGE_MAX_AGE_SECONDS = 120
+
+
+class MessageDeduplicator:
+    """Tracks recently seen Feishu message ids within one worker process."""
+
+    def __init__(self, ttl_seconds: int) -> None:
+        """Initializes the in-memory dedupe cache.
+
+        Args:
+            ttl_seconds: Number of seconds to retain seen message ids.
+        """
+
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        self._ttl_seconds = ttl_seconds
+        self._seen_at: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def check_and_mark_seen(self, message_id: str | None) -> bool:
+        """Returns ``True`` when ``message_id`` was already seen."""
+
+        if not message_id:
+            return False
+
+        now = time_module.monotonic()
+        with self._lock:
+            self._remove_expired(now)
+            if message_id in self._seen_at:
+                return True
+
+            self._seen_at[message_id] = now
+        return False
+
+    def _remove_expired(self, now: float) -> None:
+        """Drops ids outside the dedupe TTL."""
+
+        expired = [
+            message_id
+            for message_id, seen_at in self._seen_at.items()
+            if now - seen_at > self._ttl_seconds
+        ]
+        for message_id in expired:
+            del self._seen_at[message_id]
 
 
 def handle_message_event(
     data: P2ImMessageReceiveV1,
     reports: ReportService,
     messenger: FeishuMessenger,
+    *,
+    deduplicator: MessageDeduplicator | None = None,
+    max_message_age_seconds: int = DEFAULT_MESSAGE_MAX_AGE_SECONDS,
 ) -> None:
     """Handles a typed Feishu message event from the SDK dispatcher.
 
@@ -32,13 +81,22 @@ def handle_message_event(
         messenger: Feishu message sender.
     """
 
-    handle_message_payload(_event_to_dict(data), reports, messenger)
+    handle_message_payload(
+        _event_to_dict(data),
+        reports,
+        messenger,
+        deduplicator=deduplicator,
+        max_message_age_seconds=max_message_age_seconds,
+    )
 
 
 def handle_message_payload(
     raw: dict[str, Any],
     reports: ReportService,
     messenger: FeishuMessenger,
+    *,
+    deduplicator: MessageDeduplicator | None = None,
+    max_message_age_seconds: int = DEFAULT_MESSAGE_MAX_AGE_SECONDS,
 ) -> None:
     """Handles a decoded Feishu message payload.
 
@@ -55,6 +113,15 @@ def handle_message_payload(
 
     event = raw.get("event", {})
     message = event.get("message", {}) if isinstance(event, dict) else {}
+    message_id = message.get("message_id")
+    if _is_stale_message(raw, max_message_age_seconds):
+        logger.info("Drop stale message event, message_id=%s", message_id)
+        return
+
+    if deduplicator and deduplicator.check_and_mark_seen(message_id):
+        logger.info("Drop duplicate message event, message_id=%s", message_id)
+        return
+
     chat_id = message.get("chat_id")
     content_raw = message.get("content", "{}")
 
@@ -161,3 +228,52 @@ def _event_to_dict(data: Any) -> dict[str, Any]:
     """
 
     return json.loads(lark.JSON.marshal(data))
+
+
+def _is_stale_message(raw: dict[str, Any], max_age_seconds: int) -> bool:
+    """Checks whether a Feishu message event is older than the accepted window."""
+
+    create_time, source = _get_message_create_time(raw)
+    if create_time is None:
+        logger.warning("No create_time found in message event; process anyway")
+        return False
+
+    created_at = _parse_timestamp_seconds(create_time)
+    if created_at is None:
+        logger.warning(
+            "Invalid %s in message event; process anyway",
+            source,
+        )
+        return False
+
+    age_seconds = time_module.time() - created_at
+    return age_seconds > max_age_seconds
+
+
+def _get_message_create_time(raw: dict[str, Any]) -> tuple[Any | None, str]:
+    """Returns message create time, preferring ``event.message.create_time``."""
+
+    event = raw.get("event", {})
+    message = event.get("message", {}) if isinstance(event, dict) else {}
+    if isinstance(message, dict) and message.get("create_time") not in (None, ""):
+        return message.get("create_time"), "event.message.create_time"
+
+    header = raw.get("header", {})
+    if isinstance(header, dict) and header.get("create_time") not in (None, ""):
+        return header.get("create_time"), "header.create_time"
+
+    return None, "create_time"
+
+
+def _parse_timestamp_seconds(value: Any) -> float | None:
+    """Parses Feishu second or millisecond timestamps into Unix seconds."""
+
+    try:
+        timestamp = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+    # Feishu event timestamps are commonly millisecond strings.
+    if timestamp >= 10_000_000_000:
+        timestamp /= 1000
+    return timestamp

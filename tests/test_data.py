@@ -107,7 +107,7 @@ def test_sync_models_creates_baseline_and_marks_only_new_later(tmp_path: Path) -
         ]
 
     assert model_count == 2
-    assert table_names == ["models"]
+    assert table_names == ["models", "watched_models"]
     assert model_columns == [
         "id",
         "name",
@@ -117,3 +117,22 @@ def test_sync_models_creates_baseline_and_marks_only_new_later(tmp_path: Path) -
         "output_price",
         "cache_read_price",
     ]
+
+
+def test_watched_models_crud_is_global_and_sorted(tmp_path: Path) -> None:
+    repo = ModelRepository(tmp_path / "ofox.sqlite3")
+
+    assert repo.list_watched_models() == []
+    assert repo.add_watched_model("openai/gpt-4.1") is True
+    assert repo.add_watched_model("anthropic/claude-3.7") is True
+    assert repo.add_watched_model("openai/gpt-4.1") is False
+    assert repo.list_watched_models() == [
+        "anthropic/claude-3.7",
+        "openai/gpt-4.1",
+    ]
+
+    assert repo.remove_watched_model("missing/model") is False
+    assert repo.remove_watched_model("openai/gpt-4.1") is True
+    assert repo.list_watched_models() == ["anthropic/claude-3.7"]
+    assert repo.clear_watched_models() == 1
+    assert repo.list_watched_models() == []

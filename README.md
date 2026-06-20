@@ -1,55 +1,70 @@
 # Ofox 飞书机器人
 
-## 功能
+监控 `https://api.ofox.ai/v1/models` 的模型目录，并通过飞书机器人返回图片报告。使用 `var/ofox.sqlite3` 保存模型快照与全局关注列表。每日主动检测新增模型，并在检测到时发送模型报告。
 
-- 从 `https://api.ofox.ai/v1/models` 拉取模型列表。
-- 使用本地 SQLite 保存模型快照。
-- 通过飞书机器人菜单返回图片版模型报告、提供商分组表格和帮助。
-- 通过飞书私聊文本命令查看指定提供商的图片版模型表格。
-- 首次运行建立本地基线，后续运行识别新增模型。
+## 飞书应用
+
+创建企业自建应用并启用机器人能力。事件订阅选择“使用长连接接收事件”，订阅：
+
+```text
+im.message.receive_v1
+application.bot.menu_v6
+```
+
+发布应用前确保具备发送消息和上传图片所需权限。私聊使用至少需要：
+
+```text
+im:message.p2p_msg:readonly
+im:message:send_as_bot
+im:resource
+```
+
+机器人菜单使用“推送事件”：
+
+| 菜单 | event_key | 返回内容 |
+| --- | --- | --- |
+| 模型报告 | `send_report` | 摘要、新增模型、关注模型 |
+| 可用提供商 | `list_providers` | 提供商模型数和查询示例 |
+| 帮助 | `help` | 文本命令列表 |
+
+## 部署
+
+需要 Python 3.12、`uv`、可访问 Ofox API 和飞书长连接服务、一个可显示中文的 TrueType/OpenType 字体文件。
+
+```bash
+uv sync --locked
+cp .env.example .env
+uv run --locked python -m app.worker
+```
 
 ## 配置
 
-复制示例配置并填入自己的飞书应用凭证：
+`.env` 从 `.env.example` 复制，只保存在本机。
 
-```bash
-cp .env.example .env
-```
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `FEISHU_APP_ID` | 是 | 飞书应用 App ID |
+| `FEISHU_APP_SECRET` | 是 | 飞书应用 App Secret |
+| `CHINESE_FONT_PATH` | 是 | 服务器上存在的中文字体文件路径 |
+| `LOG_LEVEL` | 否 | `CRITICAL`/`ERROR`/`WARNING`/`INFO`/`DEBUG`，默认 `INFO` |
+| `FEISHU_MESSAGE_MAX_AGE_SECONDS` | 否 | 私聊文本消息最大可处理年龄，正整数秒，默认 `120` |
+| `DAILY_REPORT_TIME` | 否 | 每日检测时间，`HH:MM`，默认 `12:30` |
+| `DAILY_REPORT_TIMEZONE` | 否 | 每日检测时区，默认 `Asia/Shanghai` |
+| `FEISHU_REPORT_RECEIVE_ID_TYPE` | 否 | 主动推送目标类型，例如 `chat_id` 或 `open_id` |
+| `FEISHU_REPORT_RECEIVE_ID` | 否 | 主动推送目标 ID |
 
-`.env` 只保存在本机，不提交到 GitHub。可用变量：
+未配置 `FEISHU_REPORT_RECEIVE_ID_TYPE` 或 `FEISHU_REPORT_RECEIVE_ID` 时，worker 仍接收命令和菜单事件，但不执行每日主动推送。
 
-```dotenv
-FEISHU_APP_ID=
-FEISHU_APP_SECRET=
-CHINESE_FONT_PATH=/path/to/chinese-capable-font.ttf
-LOG_LEVEL=INFO
-```
+## 使用
 
-`CHINESE_FONT_PATH` 必须指向服务器上存在的字体文件，建议使用可显示中文的
-TrueType/OpenType 字体。
-
-## 命令
-
-机器人支持以下文本命令：
+文本命令：
 
 ```text
 provider <提供商>
+watch add <模型名称>
+watch remove <模型名称>
+watch list
+watch clear
 ```
 
-`provider <提供商>` 返回飞书图片消息，图片内包含提供商摘要和模型表格。
-
-机器人菜单包含以下入口：
-
-| 菜单 | 推送事件 | 返回内容 |
-| --- | --- | --- |
-| 帮助 | `help` | 短文本帮助信息 |
-| 可用提供商 | `list_providers` | 飞书图片，展示提供商/模型数表格 |
-| 模型报告 | `send_report` | 飞书图片，展示摘要、新增模型表格和提供商 Top 10 |
-
-机器人菜单只需要配置以下推送事件：
-
-```text
-help
-list_providers
-send_report
-```
+`provider <提供商>` 返回该提供商模型表，按输出价格从低到高展示前 30 条。`watch add` 只接受当前 Ofox catalog 中存在的完整模型名称；关注列表是服务器全局列表。`watch list` 返回关注模型图片表，`watch clear` 清空全部关注项。

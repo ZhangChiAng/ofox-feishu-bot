@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Posture
-The README is the target product contract, not a complete inventory of the current implementation. This product has not launched; refactors should implement the README and current requirements directly.
+README.md describes the current product shape and essential usage contract. Keep README.md concise and synchronized when user-visible setup, runtime behavior, configuration, or commands change.
 
 Do not add compatibility logic for old implementations, old commands, old fields, old data formats, or old behavior. Ask first when intent or scope is unclear.
 

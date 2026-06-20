@@ -90,7 +90,7 @@ class FeishuMessenger:
                 "image",
                 {"image_key": image_key},
             )
-        
+
         return False
 
     def send_long_text(self, receive_id_type: str, receive_id: str, text: str) -> bool:

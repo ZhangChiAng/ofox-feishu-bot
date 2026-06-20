@@ -1,4 +1,5 @@
 import importlib
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -13,7 +14,11 @@ from app.commands import (
     parse_provider_query,
     parse_text_command,
 )
-from app.handlers import handle_menu_payload, handle_message_payload
+from app.handlers import (
+    MessageDeduplicator,
+    handle_menu_payload,
+    handle_message_payload,
+)
 from app.models import OfoxModel
 from app.replies import BotReply
 from app.report_rendering import (
@@ -98,6 +103,18 @@ class StubReports:
     def build_provider_models_report(self, provider: str) -> BotReply:
         return BotReply.image(f"provider models: {provider}".encode())
 
+    def add_watched_model(self, model_name: str) -> BotReply:
+        return BotReply.text(f"watch add: {model_name}")
+
+    def remove_watched_model(self, model_name: str) -> BotReply:
+        return BotReply.text(f"watch remove: {model_name}")
+
+    def build_watched_models_report(self) -> BotReply:
+        return BotReply.image(b"watched models")
+
+    def clear_watched_models(self) -> BotReply:
+        return BotReply.text("watch clear")
+
 
 class StubMessenger:
     def __init__(self) -> None:
@@ -111,6 +128,26 @@ class StubMessenger:
     ) -> bool:
         self.messages.append((receive_id_type, receive_id, reply))
         return True
+
+
+def message_payload(
+    text: str,
+    *,
+    create_time: str | None = None,
+    message_id: str = "message-id",
+) -> dict[str, object]:
+    message = {
+        "message_id": message_id,
+        "chat_id": "chat-id",
+        "content": json_text(text),
+    }
+    if create_time is not None:
+        message["create_time"] = create_time
+    return {"event": {"message": message}}
+
+
+def json_text(text: str) -> str:
+    return json.dumps({"text": text})
 
 
 # ---- command parsing ----
@@ -128,6 +165,20 @@ def test_parse_readme_command_contract() -> None:
 
     assert command.kind is CommandKind.PROVIDER_MODELS
     assert command.provider == "openai"
+
+    watch_add = parse_text_command("watch add openai/gpt-4.1")
+    watch_remove = parse_text_command("watch remove openai/gpt-4.1")
+    watch_list = parse_text_command("watch list")
+    watch_clear = parse_text_command("watch clear")
+    watch_unknown = parse_text_command("watch something")
+
+    assert watch_add.kind is CommandKind.WATCH_ADD
+    assert watch_add.model_name == "openai/gpt-4.1"
+    assert watch_remove.kind is CommandKind.WATCH_REMOVE
+    assert watch_remove.model_name == "openai/gpt-4.1"
+    assert watch_list.kind is CommandKind.WATCH_LIST
+    assert watch_clear.kind is CommandKind.WATCH_CLEAR
+    assert watch_unknown.kind is CommandKind.WATCH_HELP
 
 
 def test_parse_menu_event_contract() -> None:
@@ -167,25 +218,31 @@ def test_reports_and_provider_commands(tmp_path: Path) -> None:
     baseline_text = document_text(renderer.documents[-1])
     assert_image_reply(baseline, b"png-1")
     assert renderer.documents[-1].title == "模型报告"
-    assert table_titles(renderer.documents[-1]) == ["摘要", "新增模型", "提供商 Top 10"]
+    assert table_titles(renderer.documents[-1]) == ["摘要", "新增模型", "关注模型"]
     baseline_summary = table_by_title(baseline_document, "摘要")
     assert baseline_summary.headers == ["检测时间", "模型总数", "新增模型", "状态"]
     assert len(baseline_summary.rows) == 1
     assert baseline_summary.rows[0][1:] == ["2", "0", "首次运行，已建立本地模型基线"]
     assert "指标" not in baseline_summary.headers
     assert "值" not in baseline_summary.headers
-    baseline_provider_counts = table_by_title(baseline_document, "提供商 Top 10")
-    assert baseline_provider_counts.headers == ["提供商", "模型数", "提供商", "模型数"]
-    assert baseline_provider_counts.rows == [["anthropic", "1", "openai", "1"]]
+    baseline_watched = table_by_title(baseline_document, "关注模型")
+    assert baseline_watched.headers == ["模型", "发布", "输入", "输出", "缓存"]
+    assert baseline_watched.rows == [["暂无关注模型", "-", "-", "-", "-"]]
     assert "首次运行" in baseline_text
     assert "模型总数\n新增模型" in baseline_text
-    assert "提供商数" not in baseline_text
+    assert "提供商 Top 10" not in baseline_text
+    assert "操作提示" not in baseline_text
     assert "模型\n提供商\n输入\n输出\n缓存" in baseline_text
 
+    reports.add_watched_model("openai/gpt-4.1")
     client.models = [
         model("anthropic/claude-3.7", released_at=1710000000),
         model("deepseek/deepseek-r1", released_at=1776902400),
-        model("openai/gpt-4.1", released_at=1710000000),
+        model(
+            "openai/gpt-4.1",
+            released_at=1710000000,
+            output_price="0.000020",
+        ),
         model("openai/gpt-4.2", released_at=1776988800),
     ]
     update = reports.build_model_report()
@@ -195,14 +252,12 @@ def test_reports_and_provider_commands(tmp_path: Path) -> None:
     update_summary = table_by_title(update_document, "摘要")
     assert update_summary.headers == ["检测时间", "模型总数", "新增模型", "状态"]
     assert update_summary.rows[0][1:] == ["4", "2", "发现新增模型"]
-    provider_top_10 = table_by_title(update_document, "提供商 Top 10")
-    assert provider_top_10.headers == ["提供商", "模型数", "提供商", "模型数"]
-    assert provider_top_10.rows == [
-        ["openai", "2", "deepseek", "1"],
-        ["anthropic", "1", "", ""],
-    ]
+    watched_table = table_by_title(update_document, "关注模型")
+    assert watched_table.headers == ["模型", "发布", "输入", "输出", "缓存"]
+    assert watched_table.rows == [["openai/gpt-4.1", "24-03-10", "$2/M", "$20/M", "-"]]
     assert "新增模型\n状态" in update_text
     assert "openai/gpt-4.2\nopenai\n$2/M\n$8/M\n-" in update_text
+    assert "提供商 Top 10" not in update_text
 
     provider_report = build_reply_for_menu_event("list_providers", reports)
     provider_document = renderer.documents[-1]
@@ -230,8 +285,13 @@ def test_reports_and_provider_commands(tmp_path: Path) -> None:
     assert_image_reply(provider_models, b"png-4")
     assert renderer.documents[-1].title == "提供商：openai"
     provider_models_summary = table_by_title(provider_models_document, "提供商摘要")
+    provider_models_table = table_by_title(provider_models_document, "模型列表")
     assert provider_models_summary.headers == ["提供商", "模型数", "展示数量"]
     assert provider_models_summary.rows == [["openai", "2", "2/2"]]
+    assert provider_models_table.rows == [
+        ["openai/gpt-4.2", "26-04-24", "$2/M", "$8/M", "-"],
+        ["openai/gpt-4.1", "24-03-10", "$2/M", "$20/M", "-"],
+    ]
     assert "模型\n发布\n输入\n输出\n缓存" in provider_models_text
     assert "openai/gpt-4.2\n26-04-24\n$2/M\n$8/M\n-" in provider_models_text
 
@@ -255,6 +315,77 @@ def test_text_validation_paths_stay_text(tmp_path: Path) -> None:
     assert "未找到提供商：missing" in missing_provider.content["text"]
     assert empty_provider.msg_type == "text"
     assert "请提供提供商名称" in empty_provider.content["text"]
+
+
+def test_watch_commands_manage_global_model_names(tmp_path: Path) -> None:
+    reports, client, renderer = service(
+        tmp_path,
+        [
+            model(
+                "anthropic/claude-3.7",
+                released_at=1710000000,
+                output_price="0.000004",
+            ),
+            model("openai/gpt-4.1", released_at=1710000000),
+        ],
+    )
+
+    missing = build_reply_for_text("watch add missing/model", reports)
+    added = build_reply_for_text("watch add openai/gpt-4.1", reports)
+    added_anthropic = build_reply_for_text("watch add anthropic/claude-3.7", reports)
+    duplicate = build_reply_for_text("watch add openai/gpt-4.1", reports)
+    watched = build_reply_for_text("watch list", reports)
+    watched_document = renderer.documents[-1]
+    watched_table = table_by_title(watched_document, "模型列表")
+
+    assert missing.content["text"] == "未找到模型：missing/model"
+    assert added.content["text"] == "已关注模型：openai/gpt-4.1"
+    assert added_anthropic.content["text"] == "已关注模型：anthropic/claude-3.7"
+    assert duplicate.content["text"] == "已在关注列表中：openai/gpt-4.1"
+    assert_image_reply(watched, b"png-1")
+    assert watched_document.title == "关注模型"
+    assert watched_table.headers == ["模型", "发布", "输入", "输出", "缓存"]
+    assert watched_table.rows == [
+        ["anthropic/claude-3.7", "24-03-10", "$2/M", "$4/M", "-"],
+        ["openai/gpt-4.1", "24-03-10", "$2/M", "$8/M", "-"],
+    ]
+
+    client.models = [
+        model(
+            "anthropic/claude-3.7",
+            released_at=1710000000,
+            output_price="0.000004",
+        )
+    ]
+    watched_missing = build_reply_for_text("watch list", reports)
+    watched_missing_table = table_by_title(renderer.documents[-1], "模型列表")
+    assert_image_reply(watched_missing, b"png-2")
+    assert watched_missing_table.rows == [
+        ["anthropic/claude-3.7", "24-03-10", "$2/M", "$4/M", "-"],
+        ["openai/gpt-4.1（未找到）", "-", "-", "-", "-"],
+    ]
+    assert "未在当前 catalog 中找到：openai/gpt-4.1" == watched_missing_table.note
+
+    removed = build_reply_for_text("watch remove openai/gpt-4.1", reports)
+    remove_again = build_reply_for_text("watch remove openai/gpt-4.1", reports)
+    build_reply_for_text("watch add anthropic/claude-3.7", reports)
+    clear = build_reply_for_text("watch clear", reports)
+
+    assert removed.content["text"] == "已取消关注模型：openai/gpt-4.1"
+    assert remove_again.content["text"] == "未关注模型：openai/gpt-4.1"
+    assert clear.content["text"] == "已清空关注列表，共移除 1 个模型。"
+
+
+def test_watch_command_help_text(tmp_path: Path) -> None:
+    reports, _, _ = service(tmp_path, [])
+
+    missing_name = build_reply_for_text("watch add", reports)
+    unknown_action = build_reply_for_text("watch unknown", reports)
+
+    assert missing_name.msg_type == "text"
+    assert "请提供模型名称" in missing_name.content["text"]
+    assert unknown_action.msg_type == "text"
+    assert "watch add <模型名称>" in unknown_action.content["text"]
 
 
 def test_menu_events_route_to_readme_actions(tmp_path: Path) -> None:
@@ -350,14 +481,96 @@ def test_message_payload_routes_text_command() -> None:
     messenger = StubMessenger()
 
     handle_message_payload(
-        {
-            "event": {
-                "message": {
-                    "chat_id": "chat-id",
-                    "content": '{"text": "provider openai"}',
-                }
-            }
-        },
+        message_payload("provider openai"),
+        StubReports(),
+        messenger,
+    )
+
+    assert messenger.messages == [
+        (
+            "chat_id",
+            "chat-id",
+            BotReply.image(b"provider models: openai"),
+        )
+    ]
+
+
+def test_fresh_message_payload_routes_text_command(monkeypatch) -> None:
+    now = 1_800_000_000.0
+    messenger = StubMessenger()
+    monkeypatch.setattr("app.handlers.time_module.time", lambda: now)
+
+    handle_message_payload(
+        message_payload("provider openai", create_time=str(int((now - 30) * 1000))),
+        StubReports(),
+        messenger,
+        max_message_age_seconds=120,
+    )
+
+    assert messenger.messages == [
+        (
+            "chat_id",
+            "chat-id",
+            BotReply.image(b"provider models: openai"),
+        )
+    ]
+
+
+def test_stale_message_payload_is_not_replied_to(monkeypatch) -> None:
+    now = 1_800_000_000.0
+    messenger = StubMessenger()
+    monkeypatch.setattr("app.handlers.time_module.time", lambda: now)
+
+    handle_message_payload(
+        message_payload("provider openai", create_time=str(int((now - 121) * 1000))),
+        StubReports(),
+        messenger,
+        max_message_age_seconds=120,
+    )
+
+    assert messenger.messages == []
+
+
+def test_duplicate_message_payload_is_only_replied_to_once(monkeypatch) -> None:
+    now = 1_800_000_000.0
+    messenger = StubMessenger()
+    deduplicator = MessageDeduplicator(ttl_seconds=180)
+    payload = message_payload(
+        "provider openai",
+        create_time=str(int((now - 30) * 1000)),
+        message_id="same-message-id",
+    )
+    monkeypatch.setattr("app.handlers.time_module.time", lambda: now)
+
+    handle_message_payload(
+        payload,
+        StubReports(),
+        messenger,
+        deduplicator=deduplicator,
+        max_message_age_seconds=120,
+    )
+    handle_message_payload(
+        payload,
+        StubReports(),
+        messenger,
+        deduplicator=deduplicator,
+        max_message_age_seconds=120,
+    )
+
+    assert messenger.messages == [
+        (
+            "chat_id",
+            "chat-id",
+            BotReply.image(b"provider models: openai"),
+        )
+    ]
+
+
+def test_invalid_message_create_time_processes_anyway() -> None:
+    messenger = StubMessenger()
+
+    handle_message_payload(
+        message_payload("provider openai", create_time="not-a-time"),
         StubReports(),
         messenger,
     )
