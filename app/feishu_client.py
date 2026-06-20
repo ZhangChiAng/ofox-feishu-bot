@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+from io import BytesIO
 from typing import Any
 
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+from lark_oapi.api.im.v1 import (
+    CreateImageRequest,
+    CreateImageRequestBody,
+    CreateMessageRequest,
+    CreateMessageRequestBody,
+)
 
 from app.replies import BotReply, ReplyMessageType
 
@@ -70,13 +76,22 @@ class FeishuMessenger:
             text = str(reply.content.get("text", ""))
             return self.send_long_text(receive_id_type, receive_id, text)
 
-        # Interactive cards and other structured replies can be sent as-is.
-        return self._send_message(
-            receive_id_type,
-            receive_id,
-            reply.msg_type,
-            reply.content,
-        )
+        if reply.msg_type == "image":
+            image_bytes = reply.content.get("image")
+            if not isinstance(image_bytes, bytes):
+                self.logger.error("Image reply content must contain PNG bytes")
+                return False
+            image_key = self._upload_image(image_bytes)
+            if not image_key:
+                return False
+            return self._send_message(
+                receive_id_type,
+                receive_id,
+                "image",
+                {"image_key": image_key},
+            )
+        
+        return False
 
     def send_long_text(self, receive_id_type: str, receive_id: str, text: str) -> bool:
         """Sends long text by splitting it into Feishu-sized messages.
@@ -141,6 +156,48 @@ class FeishuMessenger:
 
         self.logger.info("Send message success")
         return True
+
+    def _upload_image(self, png_bytes: bytes) -> str | None:
+        """Uploads a PNG image for Feishu message sending.
+
+        Args:
+            png_bytes: PNG image bytes.
+
+        Returns:
+            Feishu ``image_key`` when upload succeeds, otherwise ``None``.
+        """
+
+        request = (
+            CreateImageRequest.builder()
+            .request_body(
+                CreateImageRequestBody.builder()
+                .image_type("message")
+                .image(BytesIO(png_bytes))
+                .build()
+            )
+            .build()
+        )
+
+        response = self.client.im.v1.image.create(request)
+        if not response.success():
+            self.logger.error(
+                "Upload image failed, code=%s, msg=%s, log_id=%s",
+                response.code,
+                response.msg,
+                response.get_log_id(),
+            )
+            return None
+
+        image_key = str(getattr(response.data, "image_key", "") or "")
+        if not image_key:
+            self.logger.error(
+                "Upload image response missing image_key, log_id=%s",
+                response.get_log_id(),
+            )
+            return None
+
+        self.logger.info("Upload image success")
+        return image_key
 
 
 def build_message_client(

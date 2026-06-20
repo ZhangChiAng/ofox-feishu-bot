@@ -8,6 +8,7 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from app.models import OfoxModel, provider_counts
+from app.report_rendering import ReportDocument, ReportRenderer, TableBlock, TextBlock
 from app.replies import BotReply
 from app.repository import ModelRepository
 
@@ -30,25 +31,32 @@ class ModelSource(Protocol):
 class ReportService:
     """Builds user-facing reports from model source and repository data."""
 
-    def __init__(self, client: ModelSource, repository: ModelRepository) -> None:
+    def __init__(
+        self,
+        client: ModelSource,
+        repository: ModelRepository,
+        renderer: ReportRenderer,
+    ) -> None:
         """Initializes the report service.
 
         Args:
             client: Source used to fetch the current Ofox model catalog.
             repository: Repository used to persist and diff model snapshots.
+            renderer: Image renderer used for structured reports.
         """
 
         self.client = client
         self.repository = repository
+        self.renderer = renderer
 
     def build_model_report(self, limit: int = 12) -> BotReply:
-        """Builds the main model report card and persists the latest snapshot.
+        """Builds the main model report image and persists the latest snapshot.
 
         Args:
             limit: Maximum number of new models to include inline.
 
         Returns:
-            Feishu-ready interactive card reply.
+            Feishu-ready image reply.
         """
 
         models = self.client.fetch_models()
@@ -58,84 +66,95 @@ class ReportService:
             # The first sync seeds the database; every model would otherwise look new.
             status = "首次运行，已建立本地模型基线"
 
-        summary = markdown_table(
-            ["指标", "值"],
+        summary_rows = [
             [
-                ["检测时间", format_time(result.checked_at)],
-                ["模型总数", str(result.total_count)],
-                ["新增模型", str(len(result.new_models))],
-                ["状态", status],
+                format_time(result.checked_at),
+                str(result.total_count),
+                str(len(result.new_models)),
+                status,
+            ]
+        ]
+        new_model_note = ""
+        if len(result.new_models) > limit:
+            new_model_note = f"还有 {len(result.new_models) - limit} 个新增模型未展示。"
+
+        document = ReportDocument(
+            title="模型报告",
+            blocks=[
+                TableBlock(
+                    "摘要",
+                    ["检测时间", "模型总数", "新增模型", "状态"],
+                    summary_rows,
+                ),
+                TableBlock(
+                    "新增模型",
+                    ["模型", "提供商", "输入", "输出", "缓存"],
+                    format_new_model_rows(
+                        result.new_models,
+                        limit=limit,
+                        baseline_created=result.baseline_created,
+                    ),
+                    note=new_model_note,
+                ),
+                TableBlock(
+                    "提供商 Top 10",
+                    ["提供商", "模型数", "提供商", "模型数"],
+                    format_provider_count_grid_rows(result.provider_counts, limit=10),
+                ),
+                TextBlock(
+                    "操作提示",
+                    [
+                        "点击菜单“可用提供商”查看提供商/模型数表格。",
+                        "发送“provider <提供商>”查看指定提供商的模型表格。",
+                    ],
+                ),
             ],
         )
-
-        new_models = markdown_table(
-            ["模型", "提供商", "输入", "输出", "缓存"],
-            format_new_model_rows(
-                result.new_models,
-                limit=limit,
-                baseline_created=result.baseline_created,
-            ),
-        )
-        if len(result.new_models) > limit:
-            new_models = f"{new_models}\n还有 {len(result.new_models) - limit} 个新增模型未展示。"
-
-        top_providers = markdown_table(
-            ["提供商", "模型数"],
-            format_provider_count_rows(result.provider_counts, limit=10),
-        )
-
-        markdown = "\n\n".join(
-            [
-                f"**摘要**\n{summary}",
-                f"**新增模型**\n{new_models}",
-                f"**提供商 Top 10**\n{top_providers}",
-                "**操作提示**\n点击菜单“可用提供商”查看提供商/模型数表格；发送“provider <提供商>”查看指定提供商的模型表格。",
-            ]
-        )
-        return BotReply.interactive(build_card("模型报告", markdown))
+        return self._image_reply(document)
 
     def build_provider_report(self) -> BotReply:
-        """Builds a card that lists model counts for all providers.
+        """Builds an image that lists model counts for all providers.
 
         Returns:
-            Feishu-ready interactive card reply.
+            Feishu-ready image reply.
         """
 
         models = self.client.fetch_models()
         counts = provider_counts(models)
-        summary = markdown_table(
-            ["指标", "值"],
-            [
-                ["模型总数", str(len(models))],
-                ["提供商数", str(len(counts))],
+        document = ReportDocument(
+            title="可用提供商",
+            blocks=[
+                TableBlock(
+                    "摘要",
+                    ["模型总数", "提供商数"],
+                    [[str(len(models)), str(len(counts))]],
+                ),
+                TableBlock(
+                    "提供商模型数",
+                    ["提供商", "模型数", "提供商", "模型数"],
+                    format_provider_count_grid_rows(counts, limit=None),
+                ),
+                TextBlock(
+                    "查询示例",
+                    ["发送“provider <提供商>”查看模型列表，例如：provider openai"],
+                ),
             ],
         )
-        providers = markdown_table(
-            ["提供商", "模型数"],
-            format_provider_count_rows(counts, limit=None),
-        )
-        markdown = "\n\n".join(
-            [
-                f"**摘要**\n{summary}",
-                f"**提供商模型数**\n{providers}",
-                "**查询示例**\n发送“provider <提供商>”查看模型列表，例如：provider openai",
-            ]
-        )
-        return BotReply.interactive(build_card("可用提供商", markdown))
+        return self._image_reply(document)
 
     def build_provider_models_report(
         self,
         provider: str,
         limit: int = 30,
     ) -> BotReply:
-        """Builds a card listing models for a single provider.
+        """Builds an image listing models for a single provider.
 
         Args:
             provider: Provider name requested by the user.
             limit: Maximum number of provider models to include inline.
 
         Returns:
-            Feishu-ready interactive card reply or a validation message.
+            Feishu-ready image reply or a validation message.
         """
 
         provider = provider.strip().lower()
@@ -158,61 +177,95 @@ class ReportService:
             reverse=True,
         )
         shown_count = min(len(models), limit)
-        summary = markdown_table(
-            ["指标", "值"],
-            [
-                ["提供商", models[0].provider],
-                ["模型数", str(len(models))],
-                ["展示数量", f"{shown_count}/{len(models)}"],
-            ],
-        )
-        provider_models = markdown_table(
-            ["模型", "发布", "输入", "输出", "缓存"],
-            [
-                [
-                    model.name or model.id,
-                    format_released_at(model.released_at),
-                    price_per_million(model.input_price),
-                    price_per_million(model.output_price),
-                    price_per_million(model.cache_read_price),
-                ]
-                for model in models[:limit]
-            ],
-        )
+        note = ""
         if len(models) > limit:
-            provider_models = f"{provider_models}\n仅展示最新 {limit} 条，还有 {len(models) - limit} 个模型未展示。"
+            note = f"仅展示最新 {limit} 条，还有 {len(models) - limit} 个模型未展示。"
 
-        markdown = "\n\n".join(
-            [
-                f"**提供商摘要**\n{summary}",
-                f"**模型列表**\n{provider_models}",
-            ]
+        document = ReportDocument(
+            title=f"提供商：{models[0].provider}",
+            blocks=[
+                TableBlock(
+                    "提供商摘要",
+                    ["提供商", "模型数", "展示数量"],
+                    [
+                        [
+                            models[0].provider,
+                            str(len(models)),
+                            f"{shown_count}/{len(models)}",
+                        ]
+                    ],
+                ),
+                TableBlock(
+                    "模型列表",
+                    ["模型", "发布", "输入", "输出", "缓存"],
+                    format_provider_models_rows(models[:limit]),
+                    note=note,
+                ),
+            ],
         )
-        return BotReply.interactive(
-            build_card(f"提供商：{models[0].provider}", markdown)
-        )
+        return self._image_reply(document)
+
+    def _image_reply(self, document: ReportDocument) -> BotReply:
+        """Renders a structured report document as a bot image reply."""
+
+        return BotReply.image(self.renderer.render(document))
 
 
-def format_provider_count_rows(
+def format_provider_models_rows(models: list[OfoxModel]) -> list[list[str]]:
+    """Formats provider models as report table rows.
+
+    Args:
+        models: Provider models ordered for display.
+
+    Returns:
+        Table rows for a provider model report.
+    """
+
+    return [
+        [
+            model.name or model.id,
+            format_released_at(model.released_at),
+            price_per_million(model.input_price),
+            price_per_million(model.output_price),
+            price_per_million(model.cache_read_price),
+        ]
+        for model in models
+    ]
+
+
+def format_provider_count_grid_rows(
     counts: dict[str, int],
     limit: int | None,
 ) -> list[list[str]]:
-    """Formats provider counts as Markdown table rows.
+    """Formats provider counts into two vertically sorted provider/count groups.
 
     Args:
         counts: Provider counts already ordered for display.
         limit: Optional maximum number of providers to include.
 
     Returns:
-        Table rows for provider counts.
+        Four-column table rows for provider counts.
     """
 
     items = list(counts.items())
     if limit is not None:
         items = items[:limit]
     if not items:
-        return [["暂无提供商", "0"]]
-    return [[provider, str(count)] for provider, count in items]
+        return [["暂无提供商", "0", "", ""]]
+
+    left_items = items[: (len(items) + 1) // 2]
+    right_items = items[(len(items) + 1) // 2 :]
+
+    rows: list[list[str]] = []
+    for index, (left_provider, left_count) in enumerate(left_items):
+        row = [left_provider, str(left_count)]
+        if index < len(right_items):
+            right_provider, right_count = right_items[index]
+            row.extend([right_provider, str(right_count)])
+        else:
+            row.extend(["", ""])
+        rows.append(row)
+    return rows
 
 
 def format_new_model_rows(
@@ -221,7 +274,7 @@ def format_new_model_rows(
     limit: int,
     baseline_created: bool,
 ) -> list[list[str]]:
-    """Formats newly detected models as Markdown table rows.
+    """Formats newly detected models as report table rows.
 
     Args:
         models: Newly detected models ordered for display.
@@ -246,70 +299,6 @@ def format_new_model_rows(
         ]
         for model in models[:limit]
     ]
-
-
-def build_card(title: str, markdown: str) -> dict[str, object]:
-    """Builds a Feishu interactive card with Markdown content.
-
-    Args:
-        title: Card title shown in the header.
-        markdown: Markdown body content.
-
-    Returns:
-        Feishu card content.
-    """
-
-    return {
-        "schema": "2.0",
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "blue",
-            "title": {"tag": "plain_text", "content": title},
-        },
-        "body": {
-            "elements": [
-                {
-                    "tag": "markdown",
-                    "content": markdown,
-                }
-            ],
-        },
-    }
-
-
-def markdown_table(headers: list[str], rows: list[list[str]]) -> str:
-    """Formats a Markdown table for Feishu card content.
-
-    Args:
-        headers: Table header labels.
-        rows: Table rows.
-
-    Returns:
-        Markdown table string.
-    """
-
-    header = "| " + " | ".join(markdown_cell(item) for item in headers) + " |"
-    separator = "| " + " | ".join("---" for _ in headers) + " |"
-    body = [
-        "| " + " | ".join(markdown_cell(item) for item in row) + " |" for row in rows
-    ]
-    return "\n".join([header, separator, *body])
-
-
-def markdown_cell(value: object) -> str:
-    """Escapes a value for use inside a Markdown table cell.
-
-    Args:
-        value: Cell value.
-
-    Returns:
-        Markdown-safe cell text.
-    """
-
-    text = str(value).strip()
-    if not text:
-        return "-"
-    return text.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
 
 
 def format_released_at(value: int | None) -> str:

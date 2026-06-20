@@ -11,6 +11,7 @@ from app.config import AppConfig, load_config
 from app.feishu_client import FeishuMessenger, build_message_client
 from app.handlers import handle_menu_event, handle_message_event
 from app.ofox_client import OfoxClient
+from app.report_rendering import PillowReportRenderer
 from app.reports import ReportService
 from app.repository import ModelRepository
 
@@ -28,6 +29,7 @@ def main() -> None:
     reports = ReportService(
         OfoxClient(config.ofox_models_api_url),
         ModelRepository(config.ofox_db_path),
+        PillowReportRenderer(config.chinese_font_path),
     )
     messenger = FeishuMessenger(
         build_message_client(

@@ -90,13 +90,13 @@ def table_by_title(document: ReportDocument, title: str) -> TableBlock:
 
 class StubReports:
     def build_model_report(self) -> BotReply:
-        return BotReply.interactive({"type": "model report"})
+        return BotReply.image(b"model report")
 
     def build_provider_report(self) -> BotReply:
-        return BotReply.interactive({"type": "provider report"})
+        return BotReply.image(b"provider report")
 
     def build_provider_models_report(self, provider: str) -> BotReply:
-        return BotReply.interactive({"type": "provider models", "provider": provider})
+        return BotReply.image(f"provider models: {provider}".encode())
 
 
 class StubMessenger:
@@ -366,7 +366,7 @@ def test_message_payload_routes_text_command() -> None:
         (
             "chat_id",
             "chat-id",
-            BotReply.interactive({"type": "provider models", "provider": "openai"}),
+            BotReply.image(b"provider models: openai"),
         )
     ]
 

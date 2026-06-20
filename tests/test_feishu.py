@@ -70,25 +70,6 @@ def test_chunk_text_rejects_invalid_limit() -> None:
         raise AssertionError("expected ValueError")
 
 
-def test_send_reply_serializes_interactive_card() -> None:
-    client = FakeClient()
-    card = {
-        "schema": "2.0",
-        "header": {"title": {"tag": "plain_text", "content": "模型报告"}},
-        "body": {"elements": [{"tag": "markdown", "content": "| 提供商 | 模型数 |"}]},
-    }
-    messenger = FeishuMessenger(client)
-
-    ok = messenger.send_reply("chat_id", "chat-id", BotReply.interactive(card))
-
-    assert ok is True
-    request = client.im.v1.message.requests[0]
-    assert request.receive_id_type == "chat_id"
-    assert request.request_body.receive_id == "chat-id"
-    assert request.request_body.msg_type == "interactive"
-    assert json.loads(request.request_body.content) == card
-
-
 def test_send_reply_splits_text_replies(monkeypatch: Any) -> None:
     client = FakeClient()
     messenger = FeishuMessenger(client)
