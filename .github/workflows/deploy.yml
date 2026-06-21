@@ -28,12 +28,14 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -euo pipefail
+            export PATH="$HOME/.local/bin:/home/dev/.local/bin:/usr/local/bin:$PATH"
 
             cd "${{ secrets.DEPLOY_PATH }}"
 
             git fetch origin main
             git reset --hard "${{ github.event.workflow_run.head_sha }}"
 
+            command -v uv
             uv sync --locked
 
             sudo systemctl restart ofox-feishu-bot.service
