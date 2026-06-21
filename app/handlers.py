@@ -152,6 +152,9 @@ def handle_menu_event(
     data: P2ApplicationBotMenuV6,
     reports: ReportService,
     messenger: FeishuMessenger,
+    *,
+    deduplicator: MessageDeduplicator | None = None,
+    max_message_age_seconds: int = DEFAULT_MESSAGE_MAX_AGE_SECONDS,
 ) -> None:
     """Handles a typed Feishu bot menu event from the SDK dispatcher.
 
@@ -161,13 +164,22 @@ def handle_menu_event(
         messenger: Feishu message sender.
     """
 
-    handle_menu_payload(_event_to_dict(data), reports, messenger)
+    handle_menu_payload(
+        _event_to_dict(data),
+        reports,
+        messenger,
+        deduplicator=deduplicator,
+        max_message_age_seconds=max_message_age_seconds,
+    )
 
 
 def handle_menu_payload(
     raw: dict[str, Any],
     reports: ReportService,
     messenger: FeishuMessenger,
+    *,
+    deduplicator: MessageDeduplicator | None = None,
+    max_message_age_seconds: int = DEFAULT_MESSAGE_MAX_AGE_SECONDS,
 ) -> None:
     """Handles a decoded Feishu bot menu payload.
 
@@ -182,12 +194,29 @@ def handle_menu_payload(
         json.dumps(raw, ensure_ascii=False),
     )
 
+    event_id = _get_header_event_id(raw)
     event = raw.get("event", {})
     event_key = event.get("event_key") if isinstance(event, dict) else None
     operator = event.get("operator", {}) if isinstance(event, dict) else {}
     operator_id = operator.get("operator_id", {}) if isinstance(operator, dict) else {}
     open_id = operator_id.get("open_id")
     user_id = operator_id.get("user_id")
+
+    if _is_stale_menu(raw, max_message_age_seconds):
+        logger.info(
+            "Drop stale menu event, event_id=%s, event_key=%s",
+            event_id,
+            event_key,
+        )
+        return
+
+    if deduplicator and deduplicator.check_and_mark_seen(event_id):
+        logger.info(
+            "Drop duplicate menu event, event_id=%s, event_key=%s",
+            event_id,
+            event_key,
+        )
+        return
 
     logger.info(
         "Menu clicked, event_key=%s, open_id=%s, user_id=%s",
@@ -250,6 +279,26 @@ def _is_stale_message(raw: dict[str, Any], max_age_seconds: int) -> bool:
     return age_seconds > max_age_seconds
 
 
+def _is_stale_menu(raw: dict[str, Any], max_age_seconds: int) -> bool:
+    """Checks whether a Feishu menu event is older than the accepted window."""
+
+    create_time, source = _get_menu_create_time(raw)
+    if create_time is None:
+        logger.warning("No create_time found in menu event; process anyway")
+        return False
+
+    created_at = _parse_timestamp_seconds(create_time)
+    if created_at is None:
+        logger.warning(
+            "Invalid %s in menu event; process anyway",
+            source,
+        )
+        return False
+
+    age_seconds = time_module.time() - created_at
+    return age_seconds > max_age_seconds
+
+
 def _get_message_create_time(raw: dict[str, Any]) -> tuple[Any | None, str]:
     """Returns message create time, preferring ``event.message.create_time``."""
 
@@ -263,6 +312,31 @@ def _get_message_create_time(raw: dict[str, Any]) -> tuple[Any | None, str]:
         return header.get("create_time"), "header.create_time"
 
     return None, "create_time"
+
+
+def _get_menu_create_time(raw: dict[str, Any]) -> tuple[Any | None, str]:
+    """Returns menu event create time, preferring ``event.timestamp``."""
+
+    event = raw.get("event", {})
+    if isinstance(event, dict) and event.get("timestamp") not in (None, ""):
+        return event.get("timestamp"), "event.timestamp"
+
+    header = raw.get("header", {})
+    if isinstance(header, dict) and header.get("create_time") not in (None, ""):
+        return header.get("create_time"), "header.create_time"
+
+    return None, "create_time"
+
+
+def _get_header_event_id(raw: dict[str, Any]) -> str | None:
+    """Returns the Feishu header event id when present."""
+
+    header = raw.get("header", {})
+    if not isinstance(header, dict):
+        return None
+
+    event_id = header.get("event_id")
+    return str(event_id).strip() if event_id not in (None, "") else None
 
 
 def _parse_timestamp_seconds(value: Any) -> float | None:

@@ -146,6 +146,22 @@ def message_payload(
     return {"event": {"message": message}}
 
 
+def menu_payload(
+    event_key: str,
+    *,
+    event_id: str = "event-id",
+    timestamp: str | None = None,
+    open_id: str = "open-id",
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "event_key": event_key,
+        "operator": {"operator_id": {"open_id": open_id}},
+    }
+    if timestamp is not None:
+        event["timestamp"] = timestamp
+    return {"header": {"event_id": event_id}, "event": event}
+
+
 def json_text(text: str) -> str:
     return json.dumps({"text": text})
 
@@ -588,12 +604,7 @@ def test_menu_payload_keeps_only_supported_menu_events() -> None:
     messenger = StubMessenger()
 
     handle_menu_payload(
-        {
-            "event": {
-                "event_key": "list_watched",
-                "operator": {"operator_id": {"open_id": "open-id"}},
-            }
-        },
+        menu_payload("list_watched"),
         StubReports(),
         messenger,
     )
@@ -603,6 +614,77 @@ def test_menu_payload_keeps_only_supported_menu_events() -> None:
             "open_id",
             "open-id",
             BotReply.text("已收到未知菜单事件：list_watched"),
+        )
+    ]
+
+
+def test_fresh_menu_payload_routes_menu_command(monkeypatch) -> None:
+    now = 1_800_000_000.0
+    messenger = StubMessenger()
+    monkeypatch.setattr("app.handlers.time_module.time", lambda: now)
+
+    handle_menu_payload(
+        menu_payload("send_report", timestamp=str(int(now - 30))),
+        StubReports(),
+        messenger,
+        max_message_age_seconds=120,
+    )
+
+    assert messenger.messages == [
+        (
+            "open_id",
+            "open-id",
+            BotReply.image(b"model report"),
+        )
+    ]
+
+
+def test_stale_menu_payload_is_not_replied_to(monkeypatch) -> None:
+    now = 1_800_000_000.0
+    messenger = StubMessenger()
+    monkeypatch.setattr("app.handlers.time_module.time", lambda: now)
+
+    handle_menu_payload(
+        menu_payload("send_report", timestamp=str(int(now - 121))),
+        StubReports(),
+        messenger,
+        max_message_age_seconds=120,
+    )
+
+    assert messenger.messages == []
+
+
+def test_duplicate_menu_payload_is_only_replied_to_once(monkeypatch) -> None:
+    now = 1_800_000_000.0
+    messenger = StubMessenger()
+    deduplicator = MessageDeduplicator(ttl_seconds=180)
+    payload = menu_payload(
+        "send_report",
+        event_id="same-event-id",
+        timestamp=str(int((now - 30) * 1000)),
+    )
+    monkeypatch.setattr("app.handlers.time_module.time", lambda: now)
+
+    handle_menu_payload(
+        payload,
+        StubReports(),
+        messenger,
+        deduplicator=deduplicator,
+        max_message_age_seconds=120,
+    )
+    handle_menu_payload(
+        payload,
+        StubReports(),
+        messenger,
+        deduplicator=deduplicator,
+        max_message_age_seconds=120,
+    )
+
+    assert messenger.messages == [
+        (
+            "open_id",
+            "open-id",
+            BotReply.image(b"model report"),
         )
     ]
 

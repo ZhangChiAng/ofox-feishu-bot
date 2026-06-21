@@ -37,7 +37,7 @@ class AppConfig:
         daily_report_timezone: Timezone used to interpret ``daily_report_time``.
         feishu_report_receive_id_type: Feishu receiver id type for proactive pushes.
         feishu_report_receive_id: Feishu receiver id for proactive pushes.
-        feishu_message_max_age_seconds: Maximum age for inbound message events.
+        feishu_message_max_age_seconds: Maximum age for inbound message/menu events.
     """
 
     feishu_app_id: str

@@ -47,7 +47,7 @@ uv run --locked python -m app.worker
 | `FEISHU_APP_SECRET` | 是 | 飞书应用 App Secret |
 | `CHINESE_FONT_PATH` | 是 | 服务器上存在的中文字体文件路径 |
 | `LOG_LEVEL` | 否 | `CRITICAL`/`ERROR`/`WARNING`/`INFO`/`DEBUG`，默认 `INFO` |
-| `FEISHU_MESSAGE_MAX_AGE_SECONDS` | 否 | 私聊文本消息最大可处理年龄，正整数秒，默认 `120` |
+| `FEISHU_MESSAGE_MAX_AGE_SECONDS` | 否 | 私聊文本消息和菜单事件最大可处理年龄，正整数秒，默认 `120` |
 | `DAILY_REPORT_TIME` | 否 | 每日检测时间，`HH:MM`，默认 `12:30` |
 | `DAILY_REPORT_TIMEZONE` | 否 | 每日检测时区，默认 `Asia/Shanghai` |
 | `FEISHU_REPORT_RECEIVE_ID_TYPE` | 否 | 主动推送目标类型，例如 `chat_id` 或 `open_id` |

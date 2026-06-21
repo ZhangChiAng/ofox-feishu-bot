@@ -104,7 +104,13 @@ def build_event_handler(
             )
         )
         .register_p2_application_bot_menu_v6(
-            lambda data: handle_menu_event(data, reports, messenger)
+            lambda data: handle_menu_event(
+                data,
+                reports,
+                messenger,
+                deduplicator=deduplicator,
+                max_message_age_seconds=max_message_age_seconds,
+            )
         )
         .build()
     )
