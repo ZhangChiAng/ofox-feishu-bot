@@ -39,6 +39,11 @@ uv run --locked python -m app.worker
 
 详细的从零部署指南见 [docs/deploy_from_scratch.md](docs/deploy_from_scratch.md)。
 
+合并到 `main` 后，GitHub Actions 会在 CI 成功后通过 SSH 部署并重启
+`ofox-feishu-bot.service`。仓库 Actions Secrets 需要配置：
+`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_PATH`。
+服务器部署目录中的 `.env` 和 `var/ofox.sqlite3` 保持本地保存，不由 CI/CD 生成或覆盖。
+
 ## 配置
 
 `.env` 从 `.env.example` 复制，只保存在本机。
