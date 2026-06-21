@@ -37,6 +37,8 @@ cp .env.example .env
 uv run --locked python -m app.worker
 ```
 
+详细的从零部署指南见 [docs/deploy_from_scratch.md](docs/deploy_from_scratch.md)。
+
 ## 配置
 
 `.env` 从 `.env.example` 复制，只保存在本机。
@@ -68,3 +70,7 @@ watch clear
 ```
 
 `provider <提供商>` 返回该提供商模型表，按输出价格从低到高展示前 30 条。`watch add` 只接受当前 Ofox catalog 中存在的完整模型名称；关注列表是服务器全局列表。`watch list` 返回关注模型图片表，`watch clear` 清空全部关注项。
+
+## License
+
+MIT
