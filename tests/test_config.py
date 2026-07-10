@@ -45,7 +45,7 @@ def test_defaults_are_loaded(tmp_path: Path) -> None:
     assert config.ofox_db_path == OFOX_DB_PATH
     assert config.chinese_font_path == tmp_path / "report.ttf"
     assert config.log_level == "INFO"
-    assert config.daily_report_time == time(12, 30)
+    assert config.daily_report_times == [time(9, 30), time(14, 0)]
     assert config.daily_report_timezone.key == "Asia/Shanghai"
     assert config.feishu_report_receive_id_type == ""
     assert config.feishu_report_receive_id == ""
@@ -62,7 +62,7 @@ def test_daily_report_settings_are_loaded(tmp_path: Path) -> None:
 
     config = load_config(environ=env)
 
-    assert config.daily_report_time == time(8, 5)
+    assert config.daily_report_times == [time(8, 5)]
     assert config.daily_report_timezone.key == "UTC"
     assert config.feishu_report_receive_id_type == "chat_id"
     assert config.feishu_report_receive_id == "chat-id"

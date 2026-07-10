@@ -73,17 +73,42 @@ def test_next_daily_run_uses_configured_timezone() -> None:
 
     before = next_daily_run(
         datetime(2026, 1, 1, 12, 0, tzinfo=timezone),
-        time(12, 30),
+        [time(12, 30)],
         timezone,
     )
     after = next_daily_run(
         datetime(2026, 1, 1, 12, 31, tzinfo=timezone),
-        time(12, 30),
+        [time(12, 30)],
         timezone,
     )
 
     assert before == datetime(2026, 1, 1, 12, 30, tzinfo=timezone)
     assert after == datetime(2026, 1, 2, 12, 30, tzinfo=timezone)
+
+
+def test_next_daily_run_picks_soonest_slot() -> None:
+    timezone = ZoneInfo("Asia/Shanghai")
+
+    # Past one slot today, pick next slot later today, not tomorrow.
+    next_run = next_daily_run(
+        datetime(2026, 1, 1, 10, 0, tzinfo=timezone),
+        [time(9, 30), time(14, 0)],
+        timezone,
+    )
+
+    assert next_run == datetime(2026, 1, 1, 14, 0, tzinfo=timezone)
+
+
+def test_next_daily_run_rolls_to_next_day_when_all_slots_passed() -> None:
+    timezone = ZoneInfo("Asia/Shanghai")
+
+    next_run = next_daily_run(
+        datetime(2026, 1, 1, 20, 0, tzinfo=timezone),
+        [time(9, 30), time(14, 0)],
+        timezone,
+    )
+
+    assert next_run == datetime(2026, 1, 2, 9, 30, tzinfo=timezone)
 
 
 def test_daily_report_skips_when_no_new_models() -> None:

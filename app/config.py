@@ -33,8 +33,8 @@ class AppConfig:
         ofox_db_path: SQLite database path.
         chinese_font_path: Chinese-capable font file used to render report images.
         log_level: Validated Python logging level name.
-        daily_report_time: Local time for the daily proactive report check.
-        daily_report_timezone: Timezone used to interpret ``daily_report_time``.
+        daily_report_times: Local times for the daily proactive report checks.
+        daily_report_timezone: Timezone used to interpret ``daily_report_times``.
         feishu_report_receive_id_type: Feishu receiver id type for proactive pushes.
         feishu_report_receive_id: Feishu receiver id for proactive pushes.
         feishu_message_max_age_seconds: Maximum age for inbound message/menu events.
@@ -46,7 +46,7 @@ class AppConfig:
     ofox_db_path: Path
     chinese_font_path: Path
     log_level: str
-    daily_report_time: time
+    daily_report_times: list[time]
     daily_report_timezone: ZoneInfo
     feishu_report_receive_id_type: str
     feishu_report_receive_id: str
@@ -100,7 +100,7 @@ def load_config(
             "Invalid LOG_LEVEL. Expected one of: " + ", ".join(sorted(VALID_LOG_LEVELS))
         )
 
-    daily_report_time = _get_daily_report_time(source)
+    daily_report_times = _get_daily_report_times(source)
     daily_report_timezone = _get_daily_report_timezone(source)
     feishu_message_max_age_seconds = _get_positive_int(
         source,
@@ -115,7 +115,7 @@ def load_config(
         ofox_db_path=OFOX_DB_PATH,
         chinese_font_path=chinese_font_path,
         log_level=log_level,
-        daily_report_time=daily_report_time,
+        daily_report_times=daily_report_times,
         daily_report_timezone=daily_report_timezone,
         feishu_report_receive_id_type=_get_env(source, "FEISHU_REPORT_RECEIVE_ID_TYPE"),
         feishu_report_receive_id=_get_env(source, "FEISHU_REPORT_RECEIVE_ID"),
@@ -164,19 +164,32 @@ def _get_required_file(source: Mapping[str, str], key: str) -> Path:
     return path
 
 
-def _get_daily_report_time(source: Mapping[str, str]) -> time:
-    """Reads and validates ``DAILY_REPORT_TIME`` as ``HH:MM``."""
+def _get_daily_report_times(source: Mapping[str, str]) -> list[time]:
+    """Reads and validates ``DAILY_REPORT_TIME`` as comma-separated ``HH:MM``.
 
-    value = _get_env(source, "DAILY_REPORT_TIME") or "12:30"
-    match = DAILY_REPORT_TIME_PATTERN.match(value)
-    if not match:
+    Multiple times are accepted and sorted ascending so the scheduler can pick
+    the soonest upcoming slot. Defaults to ``09:30,14:00``.
+    """
+
+    value = _get_env(source, "DAILY_REPORT_TIME") or "09:30,14:00"
+    raw_times = [part.strip() for part in value.split(",") if part.strip()]
+    if not raw_times:
         raise ConfigurationError(
-            "Invalid DAILY_REPORT_TIME. Expected HH:MM, e.g. 12:30"
+            "Invalid DAILY_REPORT_TIME. Expected one or more HH:MM, e.g. 09:30,14:00"
         )
-    return time(
-        hour=int(match.group("hour")),
-        minute=int(match.group("minute")),
-    )
+
+    parsed: list[time] = []
+    for raw in raw_times:
+        match = DAILY_REPORT_TIME_PATTERN.match(raw)
+        if not match:
+            raise ConfigurationError(
+                "Invalid DAILY_REPORT_TIME. Expected HH:MM, e.g. 09:30,14:00"
+            )
+        parsed.append(
+            time(hour=int(match.group("hour")), minute=int(match.group("minute")))
+        )
+    parsed.sort()
+    return parsed
 
 
 def _get_daily_report_timezone(source: Mapping[str, str]) -> ZoneInfo:

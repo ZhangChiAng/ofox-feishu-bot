@@ -152,7 +152,7 @@ def start_daily_report_thread(
     thread = threading.Thread(
         target=daily_report_loop,
         args=(
-            config.daily_report_time,
+            config.daily_report_times,
             config.daily_report_timezone,
             config.feishu_report_receive_id_type,
             config.feishu_report_receive_id,
@@ -164,15 +164,15 @@ def start_daily_report_thread(
     )
     thread.start()
     logger.info(
-        "Daily report thread started for %s %s",
+        "Daily report thread started for %s at %s",
         config.daily_report_timezone.key,
-        config.daily_report_time.strftime("%H:%M"),
+        ", ".join(t.strftime("%H:%M") for t in config.daily_report_times),
     )
     return thread
 
 
 def daily_report_loop(
-    report_time: time,
+    report_times: list[time],
     timezone: ZoneInfo,
     receive_id_type: str,
     receive_id: str,
@@ -185,7 +185,7 @@ def daily_report_loop(
 
     stop_event = stop_event or threading.Event()
     while not stop_event.is_set():
-        next_run = next_daily_run(datetime.now(timezone), report_time, timezone)
+        next_run = next_daily_run(datetime.now(timezone), report_times, timezone)
         sleep_seconds = max(0.0, (next_run - datetime.now(timezone)).total_seconds())
         logger.info("Next daily report check at %s", next_run.isoformat())
         if stop_event.wait(sleep_seconds):
@@ -206,16 +206,20 @@ def daily_report_loop(
 
 def next_daily_run(
     now: datetime,
-    report_time: time,
+    report_times: list[time],
     timezone: ZoneInfo,
 ) -> datetime:
     """Calculates the next scheduled daily run in the configured timezone."""
 
     local_now = now.astimezone(timezone) if now.tzinfo else now.replace(tzinfo=timezone)
-    candidate = datetime.combine(local_now.date(), report_time, tzinfo=timezone)
-    if candidate <= local_now:
-        candidate += timedelta(days=1)
-    return candidate
+    candidates = []
+    for report_time in report_times:
+        candidate = datetime.combine(local_now.date(), report_time, tzinfo=timezone)
+        if candidate <= local_now:
+            # This slot already passed today; roll it to the same time tomorrow.
+            candidate += timedelta(days=1)
+        candidates.append(candidate)
+    return min(candidates)
 
 
 def send_daily_report_if_needed(
