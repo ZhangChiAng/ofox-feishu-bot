@@ -20,6 +20,7 @@ from app.reports import ReportService
 
 logger = logging.getLogger(__name__)
 DEFAULT_MESSAGE_MAX_AGE_SECONDS = 120
+MESSAGE_RECEIVED_REACTION = "Typing"
 
 
 class MessageDeduplicator:
@@ -114,6 +115,18 @@ def handle_message_payload(
     event = raw.get("event", {})
     message = event.get("message", {}) if isinstance(event, dict) else {}
     message_id = message.get("message_id")
+    message_type = message.get("message_type")
+    chat_type = message.get("chat_type")
+    if message_type != "text" or chat_type != "p2p":
+        logger.info(
+            "Ignore unsupported message event, message_id=%s, message_type=%s, "
+            "chat_type=%s",
+            message_id,
+            message_type,
+            chat_type,
+        )
+        return
+
     if _is_stale_message(raw, max_message_age_seconds):
         logger.info("Drop stale message event, message_id=%s", message_id)
         return
@@ -137,6 +150,13 @@ def handle_message_payload(
     if not chat_id:
         logger.warning("No chat_id found in message event")
         return
+
+    if message_id:
+        try:
+            messenger.add_reaction(message_id, MESSAGE_RECEIVED_REACTION)
+        except Exception:
+            # Acknowledgment is best-effort; its failure must not skip the command.
+            logger.exception("Add message acknowledgment reaction failed")
 
     try:
         reply = build_reply_for_text(text, reports)

@@ -47,6 +47,7 @@
 
 ```text
 im:message.p2p_msg:readonly
+im:message.reactions:write_only
 im:message:send_as_bot
 im:resource
 ```

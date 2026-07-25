@@ -11,8 +11,11 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateImageRequest,
     CreateImageRequestBody,
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    Emoji,
 )
 
 from app.replies import BotReply, ReplyMessageType
@@ -53,6 +56,41 @@ class FeishuMessenger:
             "text",
             {"text": text},
         )
+
+    def add_reaction(self, message_id: str, emoji_type: str) -> bool:
+        """Adds an emoji reaction to a Feishu message.
+
+        Args:
+            message_id: Feishu message id to react to.
+            emoji_type: Feishu emoji type, such as ``Typing``.
+
+        Returns:
+            ``True`` when Feishu accepts the reaction, otherwise ``False``.
+        """
+
+        request = (
+            CreateMessageReactionRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
+                .build()
+            )
+            .build()
+        )
+
+        response = self.client.im.v1.message_reaction.create(request)
+        if not response.success():
+            self.logger.error(
+                "Add message reaction failed, code=%s, msg=%s, log_id=%s",
+                response.code,
+                response.msg,
+                response.get_log_id(),
+            )
+            return False
+
+        self.logger.info("Add message reaction success")
+        return True
 
     def send_reply(
         self,

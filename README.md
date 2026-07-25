@@ -15,6 +15,7 @@ application.bot.menu_v6
 
 ```text
 im:message.p2p_msg:readonly
+im:message.reactions:write_only
 im:message:send_as_bot
 im:resource
 ```
@@ -63,6 +64,8 @@ uv run --locked python -m app.worker
 未配置 `FEISHU_REPORT_RECEIVE_ID_TYPE` 或 `FEISHU_REPORT_RECEIVE_ID` 时，worker 仍接收命令和菜单事件，但不执行每日主动推送。
 
 ## 使用
+
+机器人收到有效的私聊文本消息后，会先在原消息上添加“敲键盘”表情作为回执，再单独发送处理结果。图片、文件和群聊消息不会触发处理。
 
 文本命令：
 

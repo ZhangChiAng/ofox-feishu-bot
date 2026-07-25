@@ -32,6 +32,7 @@ class FakeApi:
 class FakeV1:
     def __init__(self, image_response: FakeResponse | None = None) -> None:
         self.message = FakeApi()
+        self.message_reaction = FakeApi()
         self.image = FakeApi(
             image_response or FakeResponse(data=SimpleNamespace(image_key="img-key"))
         )
@@ -85,6 +86,18 @@ def test_send_reply_splits_text_replies(monkeypatch: Any) -> None:
         {"text": "alpha"},
         {"text": "beta"},
     ]
+
+
+def test_add_reaction_uses_message_id_and_emoji_type() -> None:
+    client = FakeClient()
+    messenger = FeishuMessenger(client)
+
+    ok = messenger.add_reaction("message-id", "Typing")
+
+    assert ok is True
+    request = client.im.v1.message_reaction.requests[0]
+    assert request.message_id == "message-id"
+    assert request.request_body.reaction_type.emoji_type == "Typing"
 
 
 def test_send_reply_uploads_image_then_sends_image_key() -> None:

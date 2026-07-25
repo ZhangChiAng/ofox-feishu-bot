@@ -119,6 +119,11 @@ class StubReports:
 class StubMessenger:
     def __init__(self) -> None:
         self.messages: list[tuple[str, str, BotReply]] = []
+        self.reactions: list[tuple[str, str]] = []
+
+    def add_reaction(self, message_id: str, emoji_type: str) -> bool:
+        self.reactions.append((message_id, emoji_type))
+        return True
 
     def send_reply(
         self,
@@ -135,11 +140,15 @@ def message_payload(
     *,
     create_time: str | None = None,
     message_id: str = "message-id",
+    message_type: str = "text",
+    chat_type: str = "p2p",
 ) -> dict[str, object]:
     message = {
         "message_id": message_id,
         "chat_id": "chat-id",
         "content": json_text(text),
+        "message_type": message_type,
+        "chat_type": chat_type,
     }
     if create_time is not None:
         message["create_time"] = create_time
@@ -578,12 +587,33 @@ def test_message_payload_routes_text_command() -> None:
         messenger,
     )
 
+    assert messenger.reactions == [("message-id", "Typing")]
     assert messenger.messages == [
         (
             "chat_id",
             "chat-id",
             BotReply.image(b"provider models: openai"),
-        )
+        ),
+    ]
+
+
+def test_message_payload_processes_command_when_acknowledgment_raises() -> None:
+    class AcknowledgmentFailingMessenger(StubMessenger):
+        def add_reaction(self, message_id: str, emoji_type: str) -> bool:
+            raise RuntimeError("temporary acknowledgment failure")
+
+    messenger = AcknowledgmentFailingMessenger()
+
+    handle_message_payload(
+        message_payload("watch clear"),
+        StubReports(),
+        messenger,
+        deduplicator=MessageDeduplicator(ttl_seconds=180),
+    )
+
+    assert messenger.reactions == []
+    assert messenger.messages == [
+        ("chat_id", "chat-id", BotReply.text("watch clear")),
     ]
 
 
@@ -599,12 +629,13 @@ def test_fresh_message_payload_routes_text_command(monkeypatch) -> None:
         max_message_age_seconds=120,
     )
 
+    assert messenger.reactions == [("message-id", "Typing")]
     assert messenger.messages == [
         (
             "chat_id",
             "chat-id",
             BotReply.image(b"provider models: openai"),
-        )
+        ),
     ]
 
 
@@ -621,6 +652,7 @@ def test_stale_message_payload_is_not_replied_to(monkeypatch) -> None:
     )
 
     assert messenger.messages == []
+    assert messenger.reactions == []
 
 
 def test_duplicate_message_payload_is_only_replied_to_once(monkeypatch) -> None:
@@ -649,12 +681,13 @@ def test_duplicate_message_payload_is_only_replied_to_once(monkeypatch) -> None:
         max_message_age_seconds=120,
     )
 
+    assert messenger.reactions == [("same-message-id", "Typing")]
     assert messenger.messages == [
         (
             "chat_id",
             "chat-id",
             BotReply.image(b"provider models: openai"),
-        )
+        ),
     ]
 
 
@@ -667,13 +700,42 @@ def test_invalid_message_create_time_processes_anyway() -> None:
         messenger,
     )
 
+    assert messenger.reactions == [("message-id", "Typing")]
     assert messenger.messages == [
         (
             "chat_id",
             "chat-id",
             BotReply.image(b"provider models: openai"),
-        )
+        ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("message_type", "chat_type"),
+    [
+        ("image", "p2p"),
+        ("file", "p2p"),
+        ("text", "group"),
+    ],
+)
+def test_message_payload_ignores_unsupported_events(
+    message_type: str,
+    chat_type: str,
+) -> None:
+    messenger = StubMessenger()
+
+    handle_message_payload(
+        message_payload(
+            "provider openai",
+            message_type=message_type,
+            chat_type=chat_type,
+        ),
+        StubReports(),
+        messenger,
+    )
+
+    assert messenger.reactions == []
+    assert messenger.messages == []
 
 
 def test_menu_payload_keeps_only_supported_menu_events() -> None:
