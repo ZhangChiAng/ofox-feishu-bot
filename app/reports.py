@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from difflib import SequenceMatcher
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -38,6 +39,14 @@ class ModelReportPayload:
 
     reply: BotReply
     sync_result: SyncResult
+
+
+@dataclass(frozen=True, slots=True)
+class _NameResolution:
+    """Resolved canonical name or the closest available suggestion."""
+
+    matched_name: str | None
+    suggested_name: str | None
 
 
 class ReportService:
@@ -181,19 +190,29 @@ class ReportService:
             Feishu-ready image reply or a validation message.
         """
 
-        provider = provider.strip().lower()
+        provider = provider.strip()
         if not provider:
             return BotReply.text("请提供提供商名称，例如：provider openai")
 
+        catalog = self.client.fetch_models()
+        resolution = _resolve_name(
+            [item.provider for item in catalog],
+            provider,
+        )
+        if resolution.matched_name is None:
+            message = f"未找到提供商：{provider}"
+            if resolution.suggested_name is not None:
+                message += f"\n建议指令：provider {resolution.suggested_name}"
+            else:
+                message += "\n点击菜单“可用提供商”查看可用提供商。"
+            return BotReply.text(message)
+
+        canonical_provider = resolution.matched_name
         models = [
             item
-            for item in self.client.fetch_models()
-            if item.provider.lower() == provider
+            for item in catalog
+            if item.provider.casefold() == canonical_provider.casefold()
         ]
-        if not models:
-            return BotReply.text(
-                f"未找到提供商：{provider}\n点击菜单“可用提供商”查看可用提供商。"
-            )
 
         models.sort(key=sort_key_output_price)
         shown_count = min(len(models), limit)
@@ -202,14 +221,14 @@ class ReportService:
             note = f"仅展示输出价格最低 {limit} 条，还有 {len(models) - limit} 个模型未展示。"
 
         document = ReportDocument(
-            title=f"提供商：{models[0].provider}",
+            title=f"提供商：{canonical_provider}",
             blocks=[
                 TableBlock(
                     "提供商摘要",
                     ["提供商", "模型数", "展示数量"],
                     [
                         [
-                            models[0].provider,
+                            canonical_provider,
                             str(len(models)),
                             f"{shown_count}/{len(models)}",
                         ]
@@ -229,7 +248,7 @@ class ReportService:
         """Adds an existing model to the global watch list.
 
         Args:
-            model_name: Exact model name supplied by the user.
+            model_name: Model name supplied by the user.
 
         Returns:
             Text reply describing the result.
@@ -240,12 +259,17 @@ class ReportService:
             return BotReply.text("请提供模型名称，例如：watch add openai/gpt-4.1")
 
         models = self.client.fetch_models()
-        if not model_by_name(models, model_name):
-            return BotReply.text(f"未找到模型：{model_name}")
+        resolution = _resolve_name([model.name for model in models], model_name)
+        if resolution.matched_name is None:
+            message = f"未找到模型：{model_name}"
+            if resolution.suggested_name is not None:
+                message += f"\n建议指令：watch add {resolution.suggested_name}"
+            return BotReply.text(message)
 
-        if self.repository.add_watched_model(model_name):
-            return BotReply.text(f"已关注模型：{model_name}")
-        return BotReply.text(f"已在关注列表中：{model_name}")
+        canonical_name = resolution.matched_name
+        if self.repository.add_watched_model(canonical_name):
+            return BotReply.text(f"已关注模型：{canonical_name}")
+        return BotReply.text(f"已在关注列表中：{canonical_name}")
 
     def remove_watched_model(self, model_name: str) -> BotReply:
         """Removes a model from the global watch list."""
@@ -254,9 +278,20 @@ class ReportService:
         if not model_name:
             return BotReply.text("请提供模型名称，例如：watch remove openai/gpt-4.1")
 
-        if self.repository.remove_watched_model(model_name):
-            return BotReply.text(f"已取消关注模型：{model_name}")
-        return BotReply.text(f"未关注模型：{model_name}")
+        resolution = _resolve_name(
+            self.repository.list_watched_models(),
+            model_name,
+        )
+        if resolution.matched_name is None:
+            message = f"未关注模型：{model_name}"
+            if resolution.suggested_name is not None:
+                message += f"\n建议指令：watch remove {resolution.suggested_name}"
+            return BotReply.text(message)
+
+        canonical_name = resolution.matched_name
+        if self.repository.remove_watched_model(canonical_name):
+            return BotReply.text(f"已取消关注模型：{canonical_name}")
+        return BotReply.text(f"未关注模型：{canonical_name}")
 
     def build_watched_models_report(self) -> BotReply:
         """Builds an image listing the current global watch list."""
@@ -293,13 +328,31 @@ class ReportService:
         return BotReply.image(self.renderer.render(document))
 
 
-def model_by_name(models: list[OfoxModel], model_name: str) -> OfoxModel | None:
-    """Finds a model by exact display name."""
+def _resolve_name(candidates: list[str], requested_name: str) -> _NameResolution:
+    """Resolves a name case-insensitively or finds the closest suggestion."""
 
-    for model in models:
-        if model.name == model_name:
-            return model
-    return None
+    ordered_candidates = sorted(
+        set(candidates),
+        key=lambda candidate: (candidate.casefold(), candidate),
+    )
+    normalized_request = requested_name.casefold()
+    for candidate in ordered_candidates:
+        if candidate.casefold() == normalized_request:
+            return _NameResolution(candidate, None)
+
+    if not ordered_candidates:
+        return _NameResolution(None, None)
+
+    # Candidate ordering makes equal similarity scores deterministic.
+    suggestion = max(
+        ordered_candidates,
+        key=lambda candidate: SequenceMatcher(
+            None,
+            normalized_request,
+            candidate.casefold(),
+        ).ratio(),
+    )
+    return _NameResolution(None, suggestion)
 
 
 def sort_key_output_price(model: OfoxModel) -> tuple[bool, Decimal, str, str]:

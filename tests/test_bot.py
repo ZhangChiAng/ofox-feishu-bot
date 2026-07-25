@@ -328,9 +328,42 @@ def test_text_validation_paths_stay_text(tmp_path: Path) -> None:
     empty_provider = reports.build_provider_models_report("")
 
     assert missing_provider.msg_type == "text"
-    assert "未找到提供商：missing" in missing_provider.content["text"]
+    assert missing_provider.content["text"] == (
+        "未找到提供商：missing\n建议指令：provider openai"
+    )
     assert empty_provider.msg_type == "text"
     assert "请提供提供商名称" in empty_provider.content["text"]
+
+
+def test_provider_name_matching_ignores_case_and_has_stable_suggestion(
+    tmp_path: Path,
+) -> None:
+    reports, _, renderer = service(
+        tmp_path,
+        [
+            model("OpenAI/gpt-4.1"),
+            model("anthropic/claude-3.7"),
+        ],
+    )
+
+    matched = build_reply_for_text("provider openai", reports)
+    suggested = build_reply_for_text("provider z", reports)
+
+    assert_image_reply(matched, b"png-1")
+    assert renderer.documents[-1].title == "提供商：OpenAI"
+    assert suggested.content["text"] == (
+        "未找到提供商：z\n建议指令：provider anthropic"
+    )
+
+
+def test_provider_without_candidates_keeps_catalog_hint(tmp_path: Path) -> None:
+    reports, _, _ = service(tmp_path, [])
+
+    reply = build_reply_for_text("provider missing", reports)
+
+    assert reply.content["text"] == (
+        "未找到提供商：missing\n点击菜单“可用提供商”查看可用提供商。"
+    )
 
 
 def test_watch_commands_manage_global_model_names(tmp_path: Path) -> None:
@@ -354,7 +387,9 @@ def test_watch_commands_manage_global_model_names(tmp_path: Path) -> None:
     watched_document = renderer.documents[-1]
     watched_table = table_by_title(watched_document, "模型列表")
 
-    assert missing.content["text"] == "未找到模型：missing/model"
+    assert missing.content["text"] == (
+        "未找到模型：missing/model\n建议指令：watch add anthropic/claude-3.7"
+    )
     assert added.content["text"] == "已关注模型：openai/gpt-4.1"
     assert added_anthropic.content["text"] == "已关注模型：anthropic/claude-3.7"
     assert duplicate.content["text"] == "已在关注列表中：openai/gpt-4.1"
@@ -388,8 +423,49 @@ def test_watch_commands_manage_global_model_names(tmp_path: Path) -> None:
     clear = build_reply_for_text("watch clear", reports)
 
     assert removed.content["text"] == "已取消关注模型：openai/gpt-4.1"
-    assert remove_again.content["text"] == "未关注模型：openai/gpt-4.1"
+    assert remove_again.content["text"] == (
+        "未关注模型：openai/gpt-4.1\n建议指令：watch remove anthropic/claude-3.7"
+    )
     assert clear.content["text"] == "已清空关注列表，共移除 1 个模型。"
+
+
+def test_watch_model_matching_uses_canonical_case_and_suggests_commands(
+    tmp_path: Path,
+) -> None:
+    reports, _, _ = service(
+        tmp_path,
+        [
+            model("OpenAI/gpt-4.1"),
+            model("anthropic/claude-3.7"),
+        ],
+    )
+
+    added = build_reply_for_text("watch add openai/GPT-4.1", reports)
+    add_suggestion = build_reply_for_text("watch add OpenAI/gpt-4.2", reports)
+    remove_suggestion = build_reply_for_text(
+        "watch remove OpenAI/gpt-4.2",
+        reports,
+    )
+    removed = build_reply_for_text("watch remove openai/GPT-4.1", reports)
+
+    assert added.content["text"] == "已关注模型：OpenAI/gpt-4.1"
+    assert add_suggestion.content["text"] == (
+        "未找到模型：OpenAI/gpt-4.2\n建议指令：watch add OpenAI/gpt-4.1"
+    )
+    assert remove_suggestion.content["text"] == (
+        "未关注模型：OpenAI/gpt-4.2\n建议指令：watch remove OpenAI/gpt-4.1"
+    )
+    assert removed.content["text"] == "已取消关注模型：OpenAI/gpt-4.1"
+
+
+def test_watch_name_suggestion_handles_empty_candidates(tmp_path: Path) -> None:
+    reports, _, _ = service(tmp_path, [])
+
+    add_reply = build_reply_for_text("watch add missing/model", reports)
+    remove_reply = build_reply_for_text("watch remove missing/model", reports)
+
+    assert add_reply.content["text"] == "未找到模型：missing/model"
+    assert remove_reply.content["text"] == "未关注模型：missing/model"
 
 
 def test_watch_command_help_text(tmp_path: Path) -> None:
