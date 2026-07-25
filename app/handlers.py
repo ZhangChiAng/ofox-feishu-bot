@@ -21,6 +21,7 @@ from app.reports import ReportService
 logger = logging.getLogger(__name__)
 DEFAULT_MESSAGE_MAX_AGE_SECONDS = 120
 MESSAGE_RECEIVED_REACTION = "Typing"
+MENU_RECEIVED_ACKNOWLEDGMENT = "⌨️ 正在处理…"
 
 
 class MessageDeduplicator:
@@ -245,6 +246,27 @@ def handle_menu_payload(
         user_id,
     )
 
+    if open_id:
+        # Menu events are user-scoped, so prefer the stable application open_id.
+        receive_id_type = "open_id"
+        receive_id = open_id
+    elif user_id:
+        receive_id_type = "user_id"
+        receive_id = user_id
+    else:
+        logger.warning("No open_id or user_id found in menu event, cannot send message")
+        return
+
+    try:
+        messenger.send_reply(
+            receive_id_type,
+            receive_id,
+            BotReply.text(MENU_RECEIVED_ACKNOWLEDGMENT),
+        )
+    except Exception:
+        # Acknowledgment is best-effort; its failure must not skip the menu command.
+        logger.exception("Send menu acknowledgment failed")
+
     try:
         reply = build_reply_for_menu_event(event_key, reports)
     except Exception:
@@ -253,15 +275,7 @@ def handle_menu_payload(
         reply = BotReply.text("处理菜单事件时出错，请稍后再试。")
 
     try:
-        if open_id:
-            # Prefer open_id when available because menu events are user-scoped.
-            messenger.send_reply("open_id", open_id, reply)
-        elif user_id:
-            messenger.send_reply("user_id", user_id, reply)
-        else:
-            logger.warning(
-                "No open_id or user_id found in menu event, cannot send message"
-            )
+        messenger.send_reply(receive_id_type, receive_id, reply)
     except Exception:
         logger.exception("Handle menu event failed")
 

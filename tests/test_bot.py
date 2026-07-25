@@ -15,6 +15,7 @@ from app.commands import (
     parse_text_command,
 )
 from app.handlers import (
+    MENU_RECEIVED_ACKNOWLEDGMENT,
     MessageDeduplicator,
     handle_menu_payload,
     handle_message_payload,
@@ -160,11 +161,17 @@ def menu_payload(
     *,
     event_id: str = "event-id",
     timestamp: str | None = None,
-    open_id: str = "open-id",
+    open_id: str | None = "open-id",
+    user_id: str | None = None,
 ) -> dict[str, object]:
+    operator_id = {}
+    if open_id is not None:
+        operator_id["open_id"] = open_id
+    if user_id is not None:
+        operator_id["user_id"] = user_id
     event: dict[str, object] = {
         "event_key": event_key,
-        "operator": {"operator_id": {"open_id": open_id}},
+        "operator": {"operator_id": operator_id},
     }
     if timestamp is not None:
         event["timestamp"] = timestamp
@@ -751,8 +758,13 @@ def test_menu_payload_keeps_only_supported_menu_events() -> None:
         (
             "open_id",
             "open-id",
+            BotReply.text(MENU_RECEIVED_ACKNOWLEDGMENT),
+        ),
+        (
+            "open_id",
+            "open-id",
             BotReply.text("已收到未知菜单事件：list_watched"),
-        )
+        ),
     ]
 
 
@@ -772,8 +784,13 @@ def test_fresh_menu_payload_routes_menu_command(monkeypatch) -> None:
         (
             "open_id",
             "open-id",
+            BotReply.text(MENU_RECEIVED_ACKNOWLEDGMENT),
+        ),
+        (
+            "open_id",
+            "open-id",
             BotReply.image(b"model report"),
-        )
+        ),
     ]
 
 
@@ -822,8 +839,77 @@ def test_duplicate_menu_payload_is_only_replied_to_once(monkeypatch) -> None:
         (
             "open_id",
             "open-id",
+            BotReply.text(MENU_RECEIVED_ACKNOWLEDGMENT),
+        ),
+        (
+            "open_id",
+            "open-id",
             BotReply.image(b"model report"),
-        )
+        ),
+    ]
+
+
+def test_menu_payload_falls_back_to_user_id() -> None:
+    messenger = StubMessenger()
+
+    handle_menu_payload(
+        menu_payload("help", open_id=None, user_id="user-id"),
+        StubReports(),
+        messenger,
+    )
+
+    assert messenger.messages == [
+        (
+            "user_id",
+            "user-id",
+            BotReply.text(MENU_RECEIVED_ACKNOWLEDGMENT),
+        ),
+        (
+            "user_id",
+            "user-id",
+            build_reply_for_menu_event("help", StubReports()),
+        ),
+    ]
+
+
+def test_menu_payload_without_receiver_is_not_acknowledged() -> None:
+    messenger = StubMessenger()
+
+    handle_menu_payload(
+        menu_payload("help", open_id=None),
+        StubReports(),
+        messenger,
+    )
+
+    assert messenger.messages == []
+
+
+def test_menu_payload_processes_command_when_acknowledgment_raises() -> None:
+    class AcknowledgmentFailingMessenger(StubMessenger):
+        def send_reply(
+            self,
+            receive_id_type: str,
+            receive_id: str,
+            reply: BotReply,
+        ) -> bool:
+            if reply == BotReply.text(MENU_RECEIVED_ACKNOWLEDGMENT):
+                raise RuntimeError("temporary acknowledgment failure")
+            return super().send_reply(receive_id_type, receive_id, reply)
+
+    messenger = AcknowledgmentFailingMessenger()
+
+    handle_menu_payload(
+        menu_payload("help"),
+        StubReports(),
+        messenger,
+    )
+
+    assert messenger.messages == [
+        (
+            "open_id",
+            "open-id",
+            build_reply_for_menu_event("help", StubReports()),
+        ),
     ]
 
 
