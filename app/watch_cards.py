@@ -61,11 +61,11 @@ class ModelCatalogSource(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class CardActionResult:
-    """Raw replacement card and toast returned to a Feishu card callback."""
+    """Raw replacement card and optional toast for a Feishu card callback."""
 
     card: dict[str, Any]
-    toast_type: str
-    toast: str
+    toast_type: str | None = None
+    toast: str | None = None
 
 
 @dataclass(slots=True)
@@ -190,28 +190,23 @@ class WatchCardService:
             context.provider = ""
             context.query = ""
             context.page = parsed.page
-            return self._result(
-                self._build_management_home(context),
-                "info",
-                "已更新关注列表。",
-            )
+            return self._result(self._build_management_home(context))
         if parsed.action in {ACTION_OPEN_ADD, ACTION_FILTER, ACTION_ADD_PAGE}:
             context.view = "add"
             context.provider = parsed.provider
             context.query = parsed.query
             context.page = parsed.page
+            card = self._build_add_card(context)
+            if parsed.action == ACTION_ADD_PAGE:
+                return self._result(card)
             return self._result(
-                self._build_add_card(context),
+                card,
                 "info",
                 "已更新筛选结果。",
             )
         if parsed.action == ACTION_QUICK_PAGE:
             context.page = parsed.page
-            return self._result(
-                self._build_quick_card(context),
-                "info",
-                "已更新新增模型列表。",
-            )
+            return self._result(self._build_quick_card(context))
         if parsed.action == ACTION_WATCH:
             inserted = self.repository.add_watched_model(parsed.model_name)
             return self._result(
@@ -887,10 +882,10 @@ class WatchCardService:
     @staticmethod
     def _result(
         card: dict[str, Any],
-        toast_type: str,
-        toast: str,
+        toast_type: str | None = None,
+        toast: str | None = None,
     ) -> CardActionResult:
-        """Creates a callback result."""
+        """Creates a callback result with an optional toast."""
 
         return CardActionResult(card=card, toast_type=toast_type, toast=toast)
 

@@ -117,8 +117,16 @@ def test_management_home_empty_missing_pagination_and_clear_confirm(
     assert callback_value(clear)["action"] == ACTION_CLEAR
     assert clear["confirm"]["title"]["content"] == "确认清空全部关注？"
 
-    next_page = cards.handle_action(callback_value(buttons(card, "下一页")[0]))
+    next_value = callback_value(buttons(card, "下一页")[0])
+    next_page = cards.handle_action(next_value)
     assert "retired/missing" in json.dumps(next_page.card, ensure_ascii=False)
+    assert next_page.toast is None
+
+    response = handle_card_action_payload(
+        {"event": {"action": {"value": next_value}}},
+        cards,
+    )
+    assert response.toast is None
 
 
 def test_add_page_combines_provider_keyword_sorting_and_pagination(
@@ -176,6 +184,7 @@ def test_add_page_combines_provider_keyword_sorting_and_pagination(
     second_text = "\n".join(markdown_contents(second_page.card))
     assert "openai/gpt-expensive" in second_text
     assert "openai/gpt-cheap" not in second_text
+    assert second_page.toast is None
 
 
 def test_watch_unwatch_duplicate_concurrent_change_and_invalid_actions(
@@ -277,6 +286,9 @@ def test_quick_card_has_only_per_model_actions_and_survives_context_expiry(
         ACTION_UNWATCH,
         ACTION_QUICK_PAGE,
     }
+
+    next_page = cards.handle_action(callback_value(buttons(card, "下一页")[0]))
+    assert next_page.toast is None
 
     watch_value = callback_value(buttons(card, "关注")[0])
     clock.now += 24 * 60 * 60 + 1

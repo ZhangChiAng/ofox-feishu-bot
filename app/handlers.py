@@ -345,18 +345,18 @@ def handle_card_action_payload(
 def _card_action_response(result: CardActionResult) -> P2CardActionTriggerResponse:
     """Converts an internal card result to the SDK callback response."""
 
-    return P2CardActionTriggerResponse(
-        {
-            "toast": {
-                "type": result.toast_type,
-                "content": result.toast,
-            },
-            "card": {
-                "type": "raw",
-                "data": result.card,
-            },
+    response: dict[str, Any] = {
+        "card": {
+            "type": "raw",
+            "data": result.card,
         }
-    )
+    }
+    if result.toast_type is not None and result.toast is not None:
+        response["toast"] = {
+            "type": result.toast_type,
+            "content": result.toast,
+        }
+    return P2CardActionTriggerResponse(response)
 
 
 def _event_to_dict(data: Any) -> dict[str, Any]:
