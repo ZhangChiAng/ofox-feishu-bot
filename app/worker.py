@@ -14,10 +14,9 @@ from lark_oapi import ws
 from app.config import AppConfig, load_config
 from app.feishu_client import FeishuMessenger, build_message_client
 from app.handlers import (
-    MessageDeduplicator,
+    EventDeduplicator,
     handle_card_action_event,
     handle_menu_event,
-    handle_message_event,
 )
 from app.ofox_client import OfoxClient
 from app.report_rendering import PillowReportRenderer
@@ -58,7 +57,7 @@ def main() -> None:
         reports,
         watch_cards,
         messenger,
-        config.feishu_message_max_age_seconds,
+        config.feishu_event_max_age_seconds,
     )
     cli = build_ws_client(config, event_handler)
     cli.start()
@@ -82,7 +81,7 @@ def build_event_handler(
     reports: ReportService,
     watch_cards: WatchCardService,
     messenger: FeishuMessenger,
-    max_message_age_seconds: int,
+    max_event_age_seconds: int,
 ) -> lark.EventDispatcherHandler:
     """Builds the Feishu SDK event dispatcher.
 
@@ -90,24 +89,15 @@ def build_event_handler(
         reports: Report service captured by event callbacks.
         watch_cards: Interactive watch-card service captured by callbacks.
         messenger: Feishu messenger captured by event callbacks.
-        max_message_age_seconds: Maximum accepted age for message callbacks.
+        max_event_age_seconds: Maximum accepted age for menu event callbacks.
 
     Returns:
-        Event dispatcher registered for message and menu callbacks.
+        Event dispatcher registered for menu and card-action callbacks.
     """
 
-    deduplicator = MessageDeduplicator(max_message_age_seconds + 60)
+    deduplicator = EventDeduplicator(max_event_age_seconds + 60)
     return (
         lark.EventDispatcherHandler.builder("", "")
-        .register_p2_im_message_receive_v1(
-            lambda data: handle_message_event(
-                data,
-                reports,
-                messenger,
-                deduplicator=deduplicator,
-                max_message_age_seconds=max_message_age_seconds,
-            )
-        )
         .register_p2_application_bot_menu_v6(
             lambda data: handle_menu_event(
                 data,
@@ -115,7 +105,7 @@ def build_event_handler(
                 watch_cards,
                 messenger,
                 deduplicator=deduplicator,
-                max_message_age_seconds=max_message_age_seconds,
+                max_event_age_seconds=max_event_age_seconds,
             )
         )
         .register_p2_card_action_trigger(

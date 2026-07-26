@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from app.handlers import (
-    MessageDeduplicator,
+    EventDeduplicator,
     handle_card_action_payload,
 )
 from app.repository import ModelRepository
@@ -313,7 +313,7 @@ def test_card_action_callback_returns_raw_card_and_deduplicates_event(
         "header": {"event_id": "same-event"},
         "event": {"action": {"value": watch_value}},
     }
-    deduplicator = MessageDeduplicator(60)
+    deduplicator = EventDeduplicator(60)
 
     first = handle_card_action_payload(payload, cards, deduplicator=deduplicator)
     second = handle_card_action_payload(payload, cards, deduplicator=deduplicator)

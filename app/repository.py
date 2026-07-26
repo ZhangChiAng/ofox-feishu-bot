@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models import OfoxModel, provider_counts
+from app.models import OfoxModel
 
 
 @dataclass(frozen=True)
@@ -17,14 +17,12 @@ class SyncResult:
 
     Attributes:
         total_count: Number of models in the current snapshot.
-        provider_counts: Current model counts grouped by provider.
         new_models: Models not seen before this sync.
         baseline_created: Whether this sync created the initial baseline.
         checked_at: UTC timestamp for this check, formatted by the report layer.
     """
 
     total_count: int
-    provider_counts: dict[str, int]
     new_models: list[OfoxModel]
     baseline_created: bool
     checked_at: str
@@ -78,7 +76,6 @@ class ModelRepository:
 
         return SyncResult(
             total_count=len(model_list),
-            provider_counts=provider_counts(model_list),
             new_models=new_models,
             baseline_created=baseline_created,
             checked_at=checked_at,

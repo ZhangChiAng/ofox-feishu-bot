@@ -31,7 +31,6 @@ class FakeReports:
             BotReply.image(b"daily report"),
             SyncResult(
                 total_count=10,
-                provider_counts={"openai": 10},
                 new_models=new_models,
                 baseline_created=False,
                 checked_at="2026-01-01T00:00:00+00:00",
@@ -191,7 +190,7 @@ def test_daily_report_thread_is_not_started_without_target(tmp_path: Path) -> No
     assert thread is None
 
 
-def test_event_dispatcher_registers_card_action_callback() -> None:
+def test_event_dispatcher_registers_only_menu_and_card_action_callbacks() -> None:
     handler = build_event_handler(
         FakeReports(0),
         FakeWatchCards(),
@@ -199,4 +198,5 @@ def test_event_dispatcher_registers_card_action_callback() -> None:
         120,
     )
 
-    assert "p2.card.action.trigger" in handler._callback_processor_map
+    assert set(handler._processorMap) == {"p2.application.bot.menu_v6"}
+    assert set(handler._callback_processor_map) == {"p2.card.action.trigger"}

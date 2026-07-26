@@ -81,7 +81,6 @@ def test_sync_models_creates_baseline_and_marks_only_new_later(tmp_path: Path) -
     assert result.baseline_created is True
     assert result.new_models == []
     assert result.total_count == 1
-    assert result.provider_counts == {"openai": 1}
 
     result = repo.sync_models([first], checked_at="2026-01-02T00:00:00+00:00")
     assert result.baseline_created is False

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 
@@ -47,19 +46,3 @@ def provider_from_model_id(model_id: str) -> str:
     # Empty prefixes should not leak into grouping output.
     provider = cleaned.split("/", 1)[0].strip()
     return provider or "unknown"
-
-
-def provider_counts(models: Iterable[OfoxModel]) -> dict[str, int]:
-    """Counts models by provider in report-friendly order.
-
-    Args:
-        models: Normalized models to group.
-
-    Returns:
-        Provider counts sorted by descending count, then provider name.
-    """
-
-    counts: dict[str, int] = {}
-    for model in models:
-        counts[model.provider] = counts.get(model.provider, 0) + 1
-    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))

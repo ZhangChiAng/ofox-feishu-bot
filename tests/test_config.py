@@ -49,7 +49,7 @@ def test_defaults_are_loaded(tmp_path: Path) -> None:
     assert config.daily_report_timezone.key == "Asia/Shanghai"
     assert config.feishu_report_receive_id_type == ""
     assert config.feishu_report_receive_id == ""
-    assert config.feishu_message_max_age_seconds == 120
+    assert config.feishu_event_max_age_seconds == 120
 
 
 def test_daily_report_settings_are_loaded(tmp_path: Path) -> None:
@@ -68,27 +68,35 @@ def test_daily_report_settings_are_loaded(tmp_path: Path) -> None:
     assert config.feishu_report_receive_id == "chat-id"
 
 
-def test_message_max_age_setting_is_loaded(tmp_path: Path) -> None:
-    env = base_env(tmp_path) | {"FEISHU_MESSAGE_MAX_AGE_SECONDS": "300"}
+def test_event_max_age_setting_is_loaded(tmp_path: Path) -> None:
+    env = base_env(tmp_path) | {"FEISHU_EVENT_MAX_AGE_SECONDS": "300"}
 
     config = load_config(environ=env)
 
-    assert config.feishu_message_max_age_seconds == 300
+    assert config.feishu_event_max_age_seconds == 300
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "secret-token"])
-def test_invalid_message_max_age_is_rejected_without_value(
+def test_invalid_event_max_age_is_rejected_without_value(
     tmp_path: Path,
     value: str,
 ) -> None:
-    env = base_env(tmp_path) | {"FEISHU_MESSAGE_MAX_AGE_SECONDS": value}
+    env = base_env(tmp_path) | {"FEISHU_EVENT_MAX_AGE_SECONDS": value}
 
     with pytest.raises(ConfigurationError) as exc_info:
         load_config(environ=env)
 
     message = str(exc_info.value)
-    assert "FEISHU_MESSAGE_MAX_AGE_SECONDS" in message
+    assert "FEISHU_EVENT_MAX_AGE_SECONDS" in message
     assert value not in message
+
+
+def test_legacy_message_max_age_setting_is_ignored(tmp_path: Path) -> None:
+    env = base_env(tmp_path) | {"FEISHU_MESSAGE_MAX_AGE_SECONDS": "300"}
+
+    config = load_config(environ=env)
+
+    assert config.feishu_event_max_age_seconds == 120
 
 
 @pytest.mark.parametrize("value", ["8:05", "24:00", "12:60", "noon"])

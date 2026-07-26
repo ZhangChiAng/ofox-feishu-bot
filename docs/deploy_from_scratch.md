@@ -46,8 +46,6 @@
 所需权限：
 
 ```text
-im:message.p2p_msg:readonly
-im:message.reactions:write_only
 im:message:send_as_bot
 im:resource
 ```
@@ -60,7 +58,6 @@ im:resource
 2. 订阅事件：
 
 ```text
-im.message.receive_v1
 application.bot.menu_v6
 ```
 
@@ -72,13 +69,9 @@ card.action.trigger
 
 ## 配置机器人菜单
 
-配置以下三个顶级机器人菜单，均使用“推送事件”。
+配置以下两个顶级机器人菜单，均使用“推送事件”。
 
 ```text
-菜单名：可用提供商
-响应动作：推送事件
-event_key：list_providers
-
 菜单名：模型报告
 响应动作：推送事件
 event_key：send_report
@@ -120,7 +113,7 @@ FEISHU_APP_ID=<FEISHU_APP_ID>
 FEISHU_APP_SECRET=<FEISHU_APP_SECRET>
 CHINESE_FONT_PATH=<CHINESE_FONT_PATH>
 LOG_LEVEL=INFO
-FEISHU_MESSAGE_MAX_AGE_SECONDS=120
+FEISHU_EVENT_MAX_AGE_SECONDS=120
 DAILY_REPORT_TIME=09:30,14:00
 DAILY_REPORT_TIMEZONE=Asia/Shanghai
 FEISHU_REPORT_RECEIVE_ID_TYPE=<REPORT_RECEIVE_ID_TYPE>
@@ -132,12 +125,12 @@ FEISHU_REPORT_RECEIVE_ID=<REPORT_RECEIVE_ID>
 
 `.env` 只能保存在服务器本地，不要提交到代码仓库。
 
-`FEISHU_MESSAGE_MAX_AGE_SECONDS` 默认 `120`。
+`FEISHU_EVENT_MAX_AGE_SECONDS` 默认 `120`。
 `DAILY_REPORT_TIME` 使用 24 小时制 `HH:MM`，多个时间用逗号分隔，默认 `09:30,14:00`。
 `DAILY_REPORT_TIMEZONE` 默认 `Asia/Shanghai`。
 未配置 `FEISHU_REPORT_RECEIVE_ID_TYPE` 或 `FEISHU_REPORT_RECEIVE_ID` 时，
 长连接 worker 仍正常启动，但会跳过每日主动推送。
-每日检测只在发现新增模型时推送模型报告图片，并随后发送关注命令提示文本。
+每日检测只在发现新增模型时推送模型报告图片，并随后发送关注快捷卡片。
 
 ## 手动验证
 
@@ -173,23 +166,13 @@ uv run python -m app.worker
 Starting Feishu websocket worker
 ```
 
-保持进程运行，在飞书中给机器人发送：
-
-```text
-provider deepseek
-```
+点击机器人菜单“模型报告”“关注管理”，均应收到机器人回复。
 
 预期：
 
-- `provider openai` 返回飞书图片消息，图片内包含提供商摘要、模型表格和价格列。
-
-点击机器人菜单“可用提供商”“模型报告”“关注管理”，均应收到机器人回复。
-
-预期：
-
-- “可用提供商”返回飞书图片，包含提供商/模型数表格和查询示例。
 - “模型报告”返回飞书图片，包含摘要表、新增模型表和关注模型表。
 - “关注管理”返回交互卡片，可逐项关注、取消、筛选、分页和清空全局共享列表。
+- 直接发送文本消息不会收到机器人回复。
 - 首次运行会创建 SQLite 基线，摘要表状态列显示"首次运行，已建立本地模型基线"，新增模型行显示"首次运行"。
 
 ## systemd 示例

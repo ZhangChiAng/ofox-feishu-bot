@@ -37,7 +37,7 @@ class AppConfig:
         daily_report_timezone: Timezone used to interpret ``daily_report_times``.
         feishu_report_receive_id_type: Feishu receiver id type for proactive pushes.
         feishu_report_receive_id: Feishu receiver id for proactive pushes.
-        feishu_message_max_age_seconds: Maximum age for inbound message/menu events.
+        feishu_event_max_age_seconds: Maximum age for inbound menu events.
     """
 
     feishu_app_id: str
@@ -50,7 +50,7 @@ class AppConfig:
     daily_report_timezone: ZoneInfo
     feishu_report_receive_id_type: str
     feishu_report_receive_id: str
-    feishu_message_max_age_seconds: int
+    feishu_event_max_age_seconds: int
 
 
 def load_config(
@@ -102,9 +102,9 @@ def load_config(
 
     daily_report_times = _get_daily_report_times(source)
     daily_report_timezone = _get_daily_report_timezone(source)
-    feishu_message_max_age_seconds = _get_positive_int(
+    feishu_event_max_age_seconds = _get_positive_int(
         source,
-        "FEISHU_MESSAGE_MAX_AGE_SECONDS",
+        "FEISHU_EVENT_MAX_AGE_SECONDS",
         120,
     )
 
@@ -119,7 +119,7 @@ def load_config(
         daily_report_timezone=daily_report_timezone,
         feishu_report_receive_id_type=_get_env(source, "FEISHU_REPORT_RECEIVE_ID_TYPE"),
         feishu_report_receive_id=_get_env(source, "FEISHU_REPORT_RECEIVE_ID"),
-        feishu_message_max_age_seconds=feishu_message_max_age_seconds,
+        feishu_event_max_age_seconds=feishu_event_max_age_seconds,
     )
 
 

@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from difflib import SequenceMatcher
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from app.models import OfoxModel, provider_counts
-from app.report_rendering import ReportDocument, ReportRenderer, TableBlock, TextBlock
+from app.models import OfoxModel
+from app.report_rendering import ReportDocument, ReportRenderer, TableBlock
 from app.replies import BotReply
 from app.repository import ModelRepository, SyncResult
 
@@ -36,14 +35,6 @@ class ModelReportPayload:
 
     reply: BotReply
     sync_result: SyncResult
-
-
-@dataclass(frozen=True, slots=True)
-class _NameResolution:
-    """Resolved canonical name or the closest available suggestion."""
-
-    matched_name: str | None
-    suggested_name: str | None
 
 
 class ReportService:
@@ -141,139 +132,10 @@ class ReportService:
         )
         return ModelReportPayload(self._image_reply(document), result)
 
-    def build_provider_report(self) -> BotReply:
-        """Builds an image that lists model counts for all providers.
-
-        Returns:
-            Feishu-ready image reply.
-        """
-
-        models = self.client.fetch_models()
-        counts = provider_counts(models)
-        document = ReportDocument(
-            title="可用提供商",
-            blocks=[
-                TableBlock(
-                    "摘要",
-                    ["模型总数", "提供商数"],
-                    [[str(len(models)), str(len(counts))]],
-                ),
-                TableBlock(
-                    "提供商模型数",
-                    ["提供商", "模型数", "提供商", "模型数"],
-                    format_provider_count_grid_rows(counts, limit=None),
-                ),
-                TextBlock(
-                    "查询示例",
-                    ["发送“provider <提供商>”查看模型列表，例如：provider openai"],
-                ),
-            ],
-        )
-        return self._image_reply(document)
-
-    def build_provider_models_report(
-        self,
-        provider: str,
-        limit: int = 30,
-    ) -> BotReply:
-        """Builds an image listing models for a single provider.
-
-        Args:
-            provider: Provider name requested by the user.
-            limit: Maximum number of provider models to include inline.
-
-        Returns:
-            Feishu-ready image reply or a validation message.
-        """
-
-        provider = provider.strip()
-        if not provider:
-            return BotReply.text("请提供提供商名称，例如：provider openai")
-
-        catalog = self.client.fetch_models()
-        resolution = _resolve_name(
-            [item.provider for item in catalog],
-            provider,
-        )
-        if resolution.matched_name is None:
-            message = f"未找到提供商：{provider}"
-            if resolution.suggested_name is not None:
-                message += f"\n建议指令：provider {resolution.suggested_name}"
-            else:
-                message += "\n点击菜单“可用提供商”查看可用提供商。"
-            return BotReply.text(message)
-
-        canonical_provider = resolution.matched_name
-        models = [
-            item
-            for item in catalog
-            if item.provider.casefold() == canonical_provider.casefold()
-        ]
-
-        models.sort(key=sort_key_model_prices)
-        shown_count = min(len(models), limit)
-        note = ""
-        if len(models) > limit:
-            note = (
-                f"仅展示按输出、输入、缓存读取价格排序后的前 {limit} 条，"
-                f"还有 {len(models) - limit} 个模型未展示。"
-            )
-
-        document = ReportDocument(
-            title=f"提供商：{canonical_provider}",
-            blocks=[
-                TableBlock(
-                    "提供商摘要",
-                    ["提供商", "模型数", "展示数量"],
-                    [
-                        [
-                            canonical_provider,
-                            str(len(models)),
-                            f"{shown_count}/{len(models)}",
-                        ]
-                    ],
-                ),
-                TableBlock(
-                    "模型列表",
-                    ["模型", "发布", "输入", "输出", "缓存"],
-                    format_provider_models_rows(models[:limit]),
-                    note=note,
-                ),
-            ],
-        )
-        return self._image_reply(document)
-
     def _image_reply(self, document: ReportDocument) -> BotReply:
         """Renders a structured report document as a bot image reply."""
 
         return BotReply.image(self.renderer.render(document))
-
-
-def _resolve_name(candidates: list[str], requested_name: str) -> _NameResolution:
-    """Resolves a name case-insensitively or finds the closest suggestion."""
-
-    ordered_candidates = sorted(
-        set(candidates),
-        key=lambda candidate: (candidate.casefold(), candidate),
-    )
-    normalized_request = requested_name.casefold()
-    for candidate in ordered_candidates:
-        if candidate.casefold() == normalized_request:
-            return _NameResolution(candidate, None)
-
-    if not ordered_candidates:
-        return _NameResolution(None, None)
-
-    # Candidate ordering makes equal similarity scores deterministic.
-    suggestion = max(
-        ordered_candidates,
-        key=lambda candidate: SequenceMatcher(
-            None,
-            normalized_request,
-            candidate.casefold(),
-        ).ratio(),
-    )
-    return _NameResolution(None, suggestion)
 
 
 def sort_key_model_prices(
@@ -309,14 +171,14 @@ def parse_price(value: str | None) -> Decimal | None:
     return price if price.is_finite() else None
 
 
-def format_provider_models_rows(models: list[OfoxModel]) -> list[list[str]]:
-    """Formats provider models as report table rows.
+def format_model_rows(models: list[OfoxModel]) -> list[list[str]]:
+    """Formats models as report table rows.
 
     Args:
-        models: Provider models ordered for display.
+        models: Models ordered for display.
 
     Returns:
-        Table rows for a provider model report.
+        Table rows for a model report.
     """
 
     return [
@@ -335,7 +197,7 @@ def format_watched_model_rows(
     models: list[OfoxModel],
     watched_names: list[str],
 ) -> tuple[list[list[str]], str]:
-    """Formats watched models using provider model list columns.
+    """Formats watched models for the model report table.
 
     Args:
         models: Latest catalog snapshot.
@@ -359,7 +221,7 @@ def format_watched_model_rows(
         available_models.append(model)
 
     available_models.sort(key=sort_key_model_prices)
-    rows = format_provider_models_rows(available_models)
+    rows = format_model_rows(available_models)
 
     if not rows:
         rows = [["暂无当前可用的关注模型", "-", "-", "-", "-"]]
@@ -370,41 +232,6 @@ def format_watched_model_rows(
         extra = "" if len(missing_names) <= 5 else f" 等 {len(missing_names)} 个"
         note = f"未在当前 catalog 中找到：{shown}{extra}"
     return rows, note
-
-
-def format_provider_count_grid_rows(
-    counts: dict[str, int],
-    limit: int | None,
-) -> list[list[str]]:
-    """Formats provider counts into two vertically sorted provider/count groups.
-
-    Args:
-        counts: Provider counts already ordered for display.
-        limit: Optional maximum number of providers to include.
-
-    Returns:
-        Four-column table rows for provider counts.
-    """
-
-    items = list(counts.items())
-    if limit is not None:
-        items = items[:limit]
-    if not items:
-        return [["暂无提供商", "0", "", ""]]
-
-    left_items = items[: (len(items) + 1) // 2]
-    right_items = items[(len(items) + 1) // 2 :]
-
-    rows: list[list[str]] = []
-    for index, (left_provider, left_count) in enumerate(left_items):
-        row = [left_provider, str(left_count)]
-        if index < len(right_items):
-            right_provider, right_count = right_items[index]
-            row.extend([right_provider, str(right_count)])
-        else:
-            row.extend(["", ""])
-        rows.append(row)
-    return rows
 
 
 def format_new_model_rows(
