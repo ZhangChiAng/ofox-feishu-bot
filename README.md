@@ -77,7 +77,7 @@ watch list
 watch clear
 ```
 
-`provider <提供商>` 返回该提供商模型表，按输出价格从低到高展示前 30 条。`watch add` 只接受当前 Ofox catalog 中存在的完整模型名称；关注列表是服务器全局列表。Provider 名和 `watch add`、`watch remove` 的模型名匹配均忽略大小写，未命中时会返回最相近名称的建议指令。`watch list` 返回关注模型图片表，`watch clear` 清空全部关注项。
+`provider <提供商>` 返回该提供商模型表，依次按输出、输入、缓存读取价格递增展示前 30 条；新增模型和关注模型使用相同排序。`watch add` 只接受当前 Ofox catalog 中存在的完整模型名称；关注列表是服务器全局列表。Provider 名和 `watch add`、`watch remove` 的模型名匹配均忽略大小写，未命中时会返回最相近名称的建议指令。`watch list` 返回关注模型图片表，`watch clear` 清空全部关注项。
 
 ## License
 

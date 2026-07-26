@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models import OfoxModel, provider_counts, sort_key_released_at
+from app.models import OfoxModel, provider_counts
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ class ModelRepository:
         return SyncResult(
             total_count=len(model_list),
             provider_counts=provider_counts(model_list),
-            new_models=sorted(new_models, key=sort_key_released_at, reverse=True),
+            new_models=new_models,
             baseline_created=baseline_created,
             checked_at=checked_at,
         )

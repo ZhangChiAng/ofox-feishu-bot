@@ -63,16 +63,3 @@ def provider_counts(models: Iterable[OfoxModel]) -> dict[str, int]:
     for model in models:
         counts[model.provider] = counts.get(model.provider, 0) + 1
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
-
-
-def sort_key_released_at(model: OfoxModel) -> tuple[int, str]:
-    """Builds a deterministic sort key for newest-first model lists.
-
-    Args:
-        model: Model to order.
-
-    Returns:
-        Tuple containing release timestamp and model id.
-    """
-
-    return (model.released_at or 0, model.id)

@@ -1,5 +1,6 @@
 import importlib
 import json
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -28,7 +29,12 @@ from app.report_rendering import (
     TableBlock,
     TextBlock,
 )
-from app.reports import ReportService, format_released_at, format_time
+from app.reports import (
+    ReportService,
+    format_released_at,
+    format_time,
+    sort_key_model_prices,
+)
 from app.repository import ModelRepository
 
 from tests.helpers import model
@@ -335,6 +341,148 @@ def test_format_time_displays_beijing_time() -> None:
 def test_format_released_at_displays_beijing_date() -> None:
     assert format_released_at(1776988800) == "26-04-24"
     assert format_released_at(None) == "-"
+
+
+def test_model_price_sort_uses_output_then_input_then_cache_read() -> None:
+    models = [
+        model(
+            "openai/a-last",
+            output_price="0.000002",
+            input_price="0.000002",
+            cache_read_price="0.000002",
+        ),
+        model(
+            "openai/x-cache-first",
+            output_price="0.000002",
+            input_price="0.000002",
+            cache_read_price="0.000001",
+        ),
+        model(
+            "openai/y-input-first",
+            output_price="0.000002",
+            input_price="0.000001",
+            cache_read_price="0.000009",
+        ),
+        model(
+            "openai/z-output-first",
+            output_price="0.000001",
+            input_price="0.000009",
+            cache_read_price="0.000009",
+        ),
+    ]
+
+    ordered = sorted(models, key=sort_key_model_prices)
+
+    assert [item.id for item in ordered] == [
+        "openai/z-output-first",
+        "openai/y-input-first",
+        "openai/x-cache-first",
+        "openai/a-last",
+    ]
+
+
+@pytest.mark.parametrize("field", ["output_price", "input_price", "cache_read_price"])
+@pytest.mark.parametrize(
+    "invalid_price",
+    [None, "", "not-a-number", "NaN", "Infinity"],
+)
+def test_model_price_sort_places_unusable_price_after_valid_price(
+    field: str,
+    invalid_price: str | None,
+) -> None:
+    valid = model(
+        "openai/z-valid",
+        output_price="0.000001",
+        input_price="0.000001",
+        cache_read_price="0.000001",
+    )
+    unusable = replace(
+        model(
+            "openai/a-unusable",
+            output_price="0.000001",
+            input_price="0.000001",
+            cache_read_price="0.000001",
+        ),
+        **{field: invalid_price},
+    )
+
+    assert sorted([unusable, valid], key=sort_key_model_prices) == [valid, unusable]
+
+
+def test_model_price_sort_uses_model_name_then_id_for_equal_prices() -> None:
+    alpha_z = replace(model("openai/z-id"), name="Alpha")
+    zulu = replace(model("openai/a-id"), name="Zulu")
+    alpha_a = replace(model("openai/a-id"), name="Alpha")
+
+    ordered = sorted([zulu, alpha_z, alpha_a], key=sort_key_model_prices)
+
+    assert [(item.name, item.id) for item in ordered] == [
+        ("Alpha", "openai/a-id"),
+        ("Alpha", "openai/z-id"),
+        ("Zulu", "openai/a-id"),
+    ]
+
+
+def test_all_model_tables_share_price_sorting_before_limits(tmp_path: Path) -> None:
+    price_ordered_models = [
+        model(
+            "openai/z-output-first",
+            released_at=1,
+            output_price="0.000001",
+            input_price="0.000009",
+            cache_read_price="0.000009",
+        ),
+        model(
+            "openai/y-input-first",
+            released_at=2,
+            output_price="0.000002",
+            input_price="0.000001",
+            cache_read_price="0.000009",
+        ),
+        model(
+            "openai/x-cache-first",
+            released_at=3,
+            output_price="0.000002",
+            input_price="0.000002",
+            cache_read_price="0.000001",
+        ),
+        model(
+            "openai/a-last",
+            released_at=4,
+            output_price="0.000002",
+            input_price="0.000002",
+            cache_read_price="0.000002",
+        ),
+    ]
+    expected_order = [
+        "openai/z-output-first",
+        "openai/y-input-first",
+        "openai/x-cache-first",
+        "openai/a-last",
+    ]
+    reports, _, renderer = service(tmp_path / "catalog", price_ordered_models[::-1])
+
+    reports.build_provider_models_report("openai", limit=3)
+    provider_table = table_by_title(renderer.documents[-1], "模型列表")
+    for item in price_ordered_models:
+        reports.add_watched_model(item.name)
+    reports.build_watched_models_report()
+    watched_table = table_by_title(renderer.documents[-1], "模型列表")
+
+    assert [row[0] for row in provider_table.rows] == expected_order[:3]
+    assert [row[0] for row in watched_table.rows] == expected_order
+
+    new_reports, new_client, new_renderer = service(
+        tmp_path / "new-models",
+        [model("baseline/original")],
+    )
+    new_reports.build_model_report(limit=3)
+    new_client.models = [model("baseline/original"), *price_ordered_models[::-1]]
+    new_reports.build_model_report(limit=3)
+    new_table = table_by_title(new_renderer.documents[-1], "新增模型")
+
+    assert [row[0] for row in new_table.rows] == expected_order[:3]
+    assert new_table.note == "还有 1 个新增模型未展示。"
 
 
 def test_text_validation_paths_stay_text(tmp_path: Path) -> None:

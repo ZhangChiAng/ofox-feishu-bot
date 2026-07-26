@@ -214,11 +214,14 @@ class ReportService:
             if item.provider.casefold() == canonical_provider.casefold()
         ]
 
-        models.sort(key=sort_key_output_price)
+        models.sort(key=sort_key_model_prices)
         shown_count = min(len(models), limit)
         note = ""
         if len(models) > limit:
-            note = f"仅展示输出价格最低 {limit} 条，还有 {len(models) - limit} 个模型未展示。"
+            note = (
+                f"仅展示按输出、输入、缓存读取价格排序后的前 {limit} 条，"
+                f"还有 {len(models) - limit} 个模型未展示。"
+            )
 
         document = ReportDocument(
             title=f"提供商：{canonical_provider}",
@@ -355,14 +358,23 @@ def _resolve_name(candidates: list[str], requested_name: str) -> _NameResolution
     return _NameResolution(None, suggestion)
 
 
-def sort_key_output_price(model: OfoxModel) -> tuple[bool, Decimal, str, str]:
-    """Builds a deterministic sort key for lowest-output-price model lists."""
+def sort_key_model_prices(
+    model: OfoxModel,
+) -> tuple[bool, Decimal, bool, Decimal, bool, Decimal, str, str]:
+    """Builds a deterministic output, input, and cache-read price sort key."""
 
-    price = parse_price(model.output_price)
+    output_price = parse_price(model.output_price)
+    input_price = parse_price(model.input_price)
+    cache_read_price = parse_price(model.cache_read_price)
+    # Each missing flag keeps unusable values behind valid prices at that level.
     return (
-        price is None,
-        price if price is not None else Decimal(0),
-        (model.name or model.id).lower(),
+        output_price is None,
+        output_price if output_price is not None else Decimal(0),
+        input_price is None,
+        input_price if input_price is not None else Decimal(0),
+        cache_read_price is None,
+        cache_read_price if cache_read_price is not None else Decimal(0),
+        (model.name or model.id).casefold(),
         model.id,
     )
 
@@ -434,7 +446,7 @@ def format_watched_model_rows(
             continue
         available_models.append(model)
 
-    available_models.sort(key=sort_key_output_price)
+    available_models.sort(key=sort_key_model_prices)
     rows = format_provider_models_rows(available_models)
     rows.extend(missing_rows)
 
@@ -493,7 +505,7 @@ def format_new_model_rows(
     """Formats newly detected models as report table rows.
 
     Args:
-        models: Newly detected models ordered for display.
+        models: Newly detected models to order for display.
         limit: Maximum number of models to include.
         baseline_created: Whether this report created the initial baseline.
 
@@ -505,6 +517,7 @@ def format_new_model_rows(
         return [["首次运行", "-", "-", "-", "-"]]
     if not models:
         return [["无新增", "-", "-", "-", "-"]]
+    ordered_models = sorted(models, key=sort_key_model_prices)
     return [
         [
             model.name or model.id,
@@ -513,7 +526,7 @@ def format_new_model_rows(
             price_per_million(model.output_price),
             price_per_million(model.cache_read_price),
         ]
-        for model in models[:limit]
+        for model in ordered_models[:limit]
     ]
 
 
