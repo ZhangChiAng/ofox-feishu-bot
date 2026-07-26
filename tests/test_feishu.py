@@ -116,6 +116,22 @@ def test_send_reply_uploads_image_then_sends_image_key() -> None:
     assert json.loads(message_request.request_body.content) == {"image_key": "img-key"}
 
 
+def test_send_reply_serializes_interactive_card_directly() -> None:
+    client = FakeClient()
+    messenger = FeishuMessenger(client)
+    card = {
+        "schema": "2.0",
+        "body": {"elements": [{"tag": "markdown", "content": "关注管理"}]},
+    }
+
+    ok = messenger.send_reply("chat_id", "chat-id", BotReply.interactive(card))
+
+    assert ok is True
+    message_request = client.im.v1.message.requests[0]
+    assert message_request.request_body.msg_type == "interactive"
+    assert json.loads(message_request.request_body.content) == card
+
+
 def test_send_reply_stops_when_image_upload_fails() -> None:
     client = FakeClient(FakeResponse(code=999, msg="failed"))
     messenger = FeishuMessenger(client)

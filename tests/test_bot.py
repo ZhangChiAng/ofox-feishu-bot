@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from app.commands import (
+    SUPPORTED_MENU_EVENTS,
     CommandKind,
     build_reply_for_menu_event,
     build_reply_for_text,
@@ -110,17 +111,13 @@ class StubReports:
     def build_provider_models_report(self, provider: str) -> BotReply:
         return BotReply.image(f"provider models: {provider}".encode())
 
-    def add_watched_model(self, model_name: str) -> BotReply:
-        return BotReply.text(f"watch add: {model_name}")
 
-    def remove_watched_model(self, model_name: str) -> BotReply:
-        return BotReply.text(f"watch remove: {model_name}")
+class StubWatchCards:
+    def open_management_card(self) -> BotReply:
+        return BotReply.interactive({"schema": "2.0", "body": {"elements": []}})
 
-    def build_watched_models_report(self) -> BotReply:
-        return BotReply.image(b"watched models")
 
-    def clear_watched_models(self) -> BotReply:
-        return BotReply.text("watch clear")
+STUB_WATCH_CARDS = StubWatchCards()
 
 
 class StubMessenger:
@@ -204,25 +201,26 @@ def test_parse_readme_command_contract() -> None:
     assert command.kind is CommandKind.PROVIDER_MODELS
     assert command.provider == "openai"
 
-    watch_add = parse_text_command("watch add openai/gpt-4.1")
-    watch_remove = parse_text_command("watch remove openai/gpt-4.1")
-    watch_list = parse_text_command("watch list")
-    watch_clear = parse_text_command("watch clear")
-    watch_unknown = parse_text_command("watch something")
-
-    assert watch_add.kind is CommandKind.WATCH_ADD
-    assert watch_add.model_name == "openai/gpt-4.1"
-    assert watch_remove.kind is CommandKind.WATCH_REMOVE
-    assert watch_remove.model_name == "openai/gpt-4.1"
-    assert watch_list.kind is CommandKind.WATCH_LIST
-    assert watch_clear.kind is CommandKind.WATCH_CLEAR
-    assert watch_unknown.kind is CommandKind.WATCH_HELP
+    for text in (
+        "watch add openai/gpt-4.1",
+        "watch remove openai/gpt-4.1",
+        "watch list",
+        "watch clear",
+        "watch something",
+    ):
+        assert parse_text_command(text).kind is CommandKind.UNKNOWN
 
 
 def test_parse_menu_event_contract() -> None:
-    assert parse_menu_event("help").kind is CommandKind.HELP
+    assert SUPPORTED_MENU_EVENTS == {
+        "list_providers",
+        "send_report",
+        "manage_watches",
+    }
+    assert parse_menu_event("help").kind is CommandKind.UNKNOWN
     assert parse_menu_event("list_providers").kind is CommandKind.LIST_PROVIDERS
     assert parse_menu_event("send_report").kind is CommandKind.MODEL_REPORT
+    assert parse_menu_event("manage_watches").kind is CommandKind.MANAGE_WATCHES
     assert parse_menu_event("list_watched").kind is CommandKind.UNKNOWN
 
 
@@ -272,7 +270,7 @@ def test_reports_and_provider_commands(tmp_path: Path) -> None:
     assert "操作提示" not in baseline_text
     assert "模型\n提供商\n输入\n输出\n缓存" in baseline_text
 
-    reports.add_watched_model("openai/gpt-4.1")
+    reports.repository.add_watched_model("openai/gpt-4.1")
     client.models = [
         model("anthropic/claude-3.7", released_at=1710000000),
         model("deepseek/deepseek-r1", released_at=1776902400),
@@ -297,7 +295,11 @@ def test_reports_and_provider_commands(tmp_path: Path) -> None:
     assert "openai/gpt-4.2\nopenai\n$2/M\n$8/M\n-" in update_text
     assert "提供商 Top 10" not in update_text
 
-    provider_report = build_reply_for_menu_event("list_providers", reports)
+    provider_report = build_reply_for_menu_event(
+        "list_providers",
+        reports,
+        STUB_WATCH_CARDS,
+    )
     provider_document = renderer.documents[-1]
     provider_report_text = document_text(renderer.documents[-1])
     assert_image_reply(provider_report, b"png-3")
@@ -465,9 +467,9 @@ def test_all_model_tables_share_price_sorting_before_limits(tmp_path: Path) -> N
     reports.build_provider_models_report("openai", limit=3)
     provider_table = table_by_title(renderer.documents[-1], "模型列表")
     for item in price_ordered_models:
-        reports.add_watched_model(item.name)
-    reports.build_watched_models_report()
-    watched_table = table_by_title(renderer.documents[-1], "模型列表")
+        reports.repository.add_watched_model(item.name)
+    reports.build_model_report()
+    watched_table = table_by_title(renderer.documents[-1], "关注模型")
 
     assert [row[0] for row in provider_table.rows] == expected_order[:3]
     assert [row[0] for row in watched_table.rows] == expected_order
@@ -530,134 +532,54 @@ def test_provider_without_candidates_keeps_catalog_hint(tmp_path: Path) -> None:
     )
 
 
-def test_watch_commands_manage_global_model_names(tmp_path: Path) -> None:
-    reports, client, renderer = service(
-        tmp_path,
-        [
-            model(
-                "anthropic/claude-3.7",
-                released_at=1710000000,
-                output_price="0.000004",
-            ),
-            model("openai/gpt-4.1", released_at=1710000000),
-        ],
-    )
-
-    missing = build_reply_for_text("watch add missing/model", reports)
-    added = build_reply_for_text("watch add openai/gpt-4.1", reports)
-    added_anthropic = build_reply_for_text("watch add anthropic/claude-3.7", reports)
-    duplicate = build_reply_for_text("watch add openai/gpt-4.1", reports)
-    watched = build_reply_for_text("watch list", reports)
-    watched_document = renderer.documents[-1]
-    watched_table = table_by_title(watched_document, "模型列表")
-
-    assert missing.content["text"] == (
-        "未找到模型：missing/model\n建议指令：watch add anthropic/claude-3.7"
-    )
-    assert added.content["text"] == "已关注模型：openai/gpt-4.1"
-    assert added_anthropic.content["text"] == "已关注模型：anthropic/claude-3.7"
-    assert duplicate.content["text"] == "已在关注列表中：openai/gpt-4.1"
-    assert_image_reply(watched, b"png-1")
-    assert watched_document.title == "关注模型"
-    assert watched_table.headers == ["模型", "发布", "输入", "输出", "缓存"]
-    assert watched_table.rows == [
-        ["anthropic/claude-3.7", "24-03-10", "$2/M", "$4/M", "-"],
-        ["openai/gpt-4.1", "24-03-10", "$2/M", "$8/M", "-"],
-    ]
-
-    client.models = [
-        model(
-            "anthropic/claude-3.7",
-            released_at=1710000000,
-            output_price="0.000004",
-        )
-    ]
-    watched_missing = build_reply_for_text("watch list", reports)
-    watched_missing_table = table_by_title(renderer.documents[-1], "模型列表")
-    assert_image_reply(watched_missing, b"png-2")
-    assert watched_missing_table.rows == [
-        ["anthropic/claude-3.7", "24-03-10", "$2/M", "$4/M", "-"],
-        ["openai/gpt-4.1（未找到）", "-", "-", "-", "-"],
-    ]
-    assert "未在当前 catalog 中找到：openai/gpt-4.1" == watched_missing_table.note
-
-    removed = build_reply_for_text("watch remove openai/gpt-4.1", reports)
-    remove_again = build_reply_for_text("watch remove openai/gpt-4.1", reports)
-    build_reply_for_text("watch add anthropic/claude-3.7", reports)
-    clear = build_reply_for_text("watch clear", reports)
-
-    assert removed.content["text"] == "已取消关注模型：openai/gpt-4.1"
-    assert remove_again.content["text"] == (
-        "未关注模型：openai/gpt-4.1\n建议指令：watch remove anthropic/claude-3.7"
-    )
-    assert clear.content["text"] == "已清空关注列表，共移除 1 个模型。"
-
-
-def test_watch_model_matching_uses_canonical_case_and_suggests_commands(
-    tmp_path: Path,
-) -> None:
-    reports, _, _ = service(
-        tmp_path,
-        [
-            model("OpenAI/gpt-4.1"),
-            model("anthropic/claude-3.7"),
-        ],
-    )
-
-    added = build_reply_for_text("watch add openai/GPT-4.1", reports)
-    add_suggestion = build_reply_for_text("watch add OpenAI/gpt-4.2", reports)
-    remove_suggestion = build_reply_for_text(
-        "watch remove OpenAI/gpt-4.2",
-        reports,
-    )
-    removed = build_reply_for_text("watch remove openai/GPT-4.1", reports)
-
-    assert added.content["text"] == "已关注模型：OpenAI/gpt-4.1"
-    assert add_suggestion.content["text"] == (
-        "未找到模型：OpenAI/gpt-4.2\n建议指令：watch add OpenAI/gpt-4.1"
-    )
-    assert remove_suggestion.content["text"] == (
-        "未关注模型：OpenAI/gpt-4.2\n建议指令：watch remove OpenAI/gpt-4.1"
-    )
-    assert removed.content["text"] == "已取消关注模型：OpenAI/gpt-4.1"
-
-
-def test_watch_name_suggestion_handles_empty_candidates(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        "watch",
+        "watch add",
+        "watch add openai/gpt-4.1",
+        "watch remove openai/gpt-4.1",
+        "watch list",
+        "watch clear",
+    ],
+)
+def test_watch_text_commands_are_unknown(tmp_path: Path, text: str) -> None:
     reports, _, _ = service(tmp_path, [])
 
-    add_reply = build_reply_for_text("watch add missing/model", reports)
-    remove_reply = build_reply_for_text("watch remove missing/model", reports)
+    reply = build_reply_for_text(text, reports)
 
-    assert add_reply.content["text"] == "未找到模型：missing/model"
-    assert remove_reply.content["text"] == "未关注模型：missing/model"
-
-
-def test_watch_command_help_text(tmp_path: Path) -> None:
-    reports, _, _ = service(tmp_path, [])
-
-    missing_name = build_reply_for_text("watch add", reports)
-    unknown_action = build_reply_for_text("watch unknown", reports)
-
-    assert missing_name.msg_type == "text"
-    assert "请提供模型名称" in missing_name.content["text"]
-    assert unknown_action.msg_type == "text"
-    assert "watch add <模型名称>" in unknown_action.content["text"]
+    assert reply.msg_type == "text"
+    assert f"未知命令：{text}" in reply.content["text"]
+    assert "关注管理" in reply.content["text"]
+    supported_commands = reply.content["text"].split("支持的文本命令：", 1)[1]
+    assert "watch" not in supported_commands
 
 
 def test_menu_events_route_to_readme_actions(tmp_path: Path) -> None:
     reports, _, renderer = service(tmp_path, [model("openai/gpt-4.1", released_at=1)])
 
-    help_reply = build_reply_for_menu_event("help", reports)
-    provider_reply = build_reply_for_menu_event("list_providers", reports)
-    report_reply = build_reply_for_menu_event("send_report", reports)
-    unknown_reply = build_reply_for_menu_event("other", reports)
+    provider_reply = build_reply_for_menu_event(
+        "list_providers",
+        reports,
+        STUB_WATCH_CARDS,
+    )
+    report_reply = build_reply_for_menu_event(
+        "send_report",
+        reports,
+        STUB_WATCH_CARDS,
+    )
+    watch_reply = build_reply_for_menu_event(
+        "manage_watches",
+        reports,
+        STUB_WATCH_CARDS,
+    )
+    unknown_reply = build_reply_for_menu_event("other", reports, STUB_WATCH_CARDS)
 
-    assert help_reply.msg_type == "text"
-    assert "可用命令" in help_reply.content["text"]
     assert provider_reply.msg_type == "image"
     assert renderer.documents[-2].title == "可用提供商"
     assert report_reply.msg_type == "image"
     assert renderer.documents[-1].title == "模型报告"
+    assert watch_reply.msg_type == "interactive"
     assert unknown_reply.msg_type == "text"
     assert "未知菜单事件" in unknown_reply.content["text"]
 
@@ -768,7 +690,16 @@ def test_message_payload_processes_command_when_acknowledgment_raises() -> None:
 
     assert messenger.reactions == []
     assert messenger.messages == [
-        ("chat_id", "chat-id", BotReply.text("watch clear")),
+        (
+            "chat_id",
+            "chat-id",
+            BotReply.text(
+                "未知命令：watch clear\n"
+                "支持的文本命令：\n"
+                "1. provider <提供商>\n\n"
+                "关注列表请通过机器人菜单“关注管理”维护。"
+            ),
+        ),
     ]
 
 
@@ -899,6 +830,7 @@ def test_menu_payload_keeps_only_supported_menu_events() -> None:
     handle_menu_payload(
         menu_payload("list_watched"),
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
     )
 
@@ -924,6 +856,7 @@ def test_fresh_menu_payload_routes_menu_command(monkeypatch) -> None:
     handle_menu_payload(
         menu_payload("send_report", timestamp=str(int(now - 30))),
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
         max_message_age_seconds=120,
     )
@@ -950,6 +883,7 @@ def test_stale_menu_payload_is_not_replied_to(monkeypatch) -> None:
     handle_menu_payload(
         menu_payload("send_report", timestamp=str(int(now - 121))),
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
         max_message_age_seconds=120,
     )
@@ -971,6 +905,7 @@ def test_duplicate_menu_payload_is_only_replied_to_once(monkeypatch) -> None:
     handle_menu_payload(
         payload,
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
         deduplicator=deduplicator,
         max_message_age_seconds=120,
@@ -978,6 +913,7 @@ def test_duplicate_menu_payload_is_only_replied_to_once(monkeypatch) -> None:
     handle_menu_payload(
         payload,
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
         deduplicator=deduplicator,
         max_message_age_seconds=120,
@@ -1001,8 +937,9 @@ def test_menu_payload_falls_back_to_user_id() -> None:
     messenger = StubMessenger()
 
     handle_menu_payload(
-        menu_payload("help", open_id=None, user_id="user-id"),
+        menu_payload("list_providers", open_id=None, user_id="user-id"),
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
     )
 
@@ -1015,7 +952,11 @@ def test_menu_payload_falls_back_to_user_id() -> None:
         (
             "user_id",
             "user-id",
-            build_reply_for_menu_event("help", StubReports()),
+            build_reply_for_menu_event(
+                "list_providers",
+                StubReports(),
+                STUB_WATCH_CARDS,
+            ),
         ),
     ]
 
@@ -1024,8 +965,9 @@ def test_menu_payload_without_receiver_is_not_acknowledged() -> None:
     messenger = StubMessenger()
 
     handle_menu_payload(
-        menu_payload("help", open_id=None),
+        menu_payload("list_providers", open_id=None),
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
     )
 
@@ -1047,8 +989,9 @@ def test_menu_payload_processes_command_when_acknowledgment_raises() -> None:
     messenger = AcknowledgmentFailingMessenger()
 
     handle_menu_payload(
-        menu_payload("help"),
+        menu_payload("list_providers"),
         StubReports(),
+        STUB_WATCH_CARDS,
         messenger,
     )
 
@@ -1056,7 +999,11 @@ def test_menu_payload_processes_command_when_acknowledgment_raises() -> None:
         (
             "open_id",
             "open-id",
-            build_reply_for_menu_event("help", StubReports()),
+            build_reply_for_menu_event(
+                "list_providers",
+                StubReports(),
+                STUB_WATCH_CARDS,
+            ),
         ),
     ]
 

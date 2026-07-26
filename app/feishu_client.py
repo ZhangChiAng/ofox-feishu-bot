@@ -129,6 +129,14 @@ class FeishuMessenger:
                 {"image_key": image_key},
             )
 
+        if reply.msg_type == "interactive":
+            return self._send_message(
+                receive_id_type,
+                receive_id,
+                "interactive",
+                reply.content,
+            )
+
         return False
 
     def send_long_text(self, receive_id_type: str, receive_id: str, text: str) -> bool:

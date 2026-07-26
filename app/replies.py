@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-ReplyMessageType = Literal["text", "image"]
+ReplyMessageType = Literal["text", "image", "interactive"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,3 +46,16 @@ class BotReply:
         """
 
         return cls(msg_type="image", content={"image": png_bytes})
+
+    @classmethod
+    def interactive(cls, card: dict[str, Any]) -> BotReply:
+        """Builds an interactive Feishu card reply.
+
+        Args:
+            card: Card JSON document sent directly as message content.
+
+        Returns:
+            Interactive card reply payload.
+        """
+
+        return cls(msg_type="interactive", content=card)

@@ -15,9 +15,6 @@ from app.replies import BotReply
 from app.repository import ModelRepository, SyncResult
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-WATCH_COMMAND_HELP = (
-    "关注命令：\nwatch add <模型名称>\nwatch remove <模型名称>\nwatch list\nwatch clear"
-)
 
 
 class ModelSource(Protocol):
@@ -114,7 +111,6 @@ class ReportService:
         watched_rows, watched_note = format_watched_model_rows(
             models,
             watched_names,
-            include_missing=False,
         )
 
         document = ReportDocument(
@@ -247,84 +243,6 @@ class ReportService:
         )
         return self._image_reply(document)
 
-    def add_watched_model(self, model_name: str) -> BotReply:
-        """Adds an existing model to the global watch list.
-
-        Args:
-            model_name: Model name supplied by the user.
-
-        Returns:
-            Text reply describing the result.
-        """
-
-        model_name = model_name.strip()
-        if not model_name:
-            return BotReply.text("请提供模型名称，例如：watch add openai/gpt-4.1")
-
-        models = self.client.fetch_models()
-        resolution = _resolve_name([model.name for model in models], model_name)
-        if resolution.matched_name is None:
-            message = f"未找到模型：{model_name}"
-            if resolution.suggested_name is not None:
-                message += f"\n建议指令：watch add {resolution.suggested_name}"
-            return BotReply.text(message)
-
-        canonical_name = resolution.matched_name
-        if self.repository.add_watched_model(canonical_name):
-            return BotReply.text(f"已关注模型：{canonical_name}")
-        return BotReply.text(f"已在关注列表中：{canonical_name}")
-
-    def remove_watched_model(self, model_name: str) -> BotReply:
-        """Removes a model from the global watch list."""
-
-        model_name = model_name.strip()
-        if not model_name:
-            return BotReply.text("请提供模型名称，例如：watch remove openai/gpt-4.1")
-
-        resolution = _resolve_name(
-            self.repository.list_watched_models(),
-            model_name,
-        )
-        if resolution.matched_name is None:
-            message = f"未关注模型：{model_name}"
-            if resolution.suggested_name is not None:
-                message += f"\n建议指令：watch remove {resolution.suggested_name}"
-            return BotReply.text(message)
-
-        canonical_name = resolution.matched_name
-        if self.repository.remove_watched_model(canonical_name):
-            return BotReply.text(f"已取消关注模型：{canonical_name}")
-        return BotReply.text(f"未关注模型：{canonical_name}")
-
-    def build_watched_models_report(self) -> BotReply:
-        """Builds an image listing the current global watch list."""
-
-        models = self.client.fetch_models()
-        watched_names = self.repository.list_watched_models()
-        rows, note = format_watched_model_rows(
-            models,
-            watched_names,
-            include_missing=True,
-        )
-        document = ReportDocument(
-            title="关注模型",
-            blocks=[
-                TableBlock(
-                    "模型列表",
-                    ["模型", "发布", "输入", "输出", "缓存"],
-                    rows,
-                    note=note,
-                )
-            ],
-        )
-        return self._image_reply(document)
-
-    def clear_watched_models(self) -> BotReply:
-        """Clears the global watch list."""
-
-        count = self.repository.clear_watched_models()
-        return BotReply.text(f"已清空关注列表，共移除 {count} 个模型。")
-
     def _image_reply(self, document: ReportDocument) -> BotReply:
         """Renders a structured report document as a bot image reply."""
 
@@ -416,15 +334,12 @@ def format_provider_models_rows(models: list[OfoxModel]) -> list[list[str]]:
 def format_watched_model_rows(
     models: list[OfoxModel],
     watched_names: list[str],
-    *,
-    include_missing: bool,
 ) -> tuple[list[list[str]], str]:
     """Formats watched models using provider model list columns.
 
     Args:
         models: Latest catalog snapshot.
         watched_names: Stored watched model names.
-        include_missing: Whether missing watched names should render as rows.
 
     Returns:
         Table rows and optional note for missing watched names.
@@ -435,20 +350,16 @@ def format_watched_model_rows(
 
     models_by_name = {model.name: model for model in models}
     available_models: list[OfoxModel] = []
-    missing_rows: list[list[str]] = []
     missing_names: list[str] = []
     for model_name in watched_names:
         model = models_by_name.get(model_name)
         if model is None:
             missing_names.append(model_name)
-            if include_missing:
-                missing_rows.append([f"{model_name}（未找到）", "-", "-", "-", "-"])
             continue
         available_models.append(model)
 
     available_models.sort(key=sort_key_model_prices)
     rows = format_provider_models_rows(available_models)
-    rows.extend(missing_rows)
 
     if not rows:
         rows = [["暂无当前可用的关注模型", "-", "-", "-", "-"]]

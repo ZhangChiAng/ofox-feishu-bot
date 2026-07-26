@@ -7,7 +7,7 @@ from app.replies import BotReply
 from app.reports import ModelReportPayload
 from app.repository import SyncResult
 from app.worker import (
-    WATCH_OPERATION_PROMPT,
+    build_event_handler,
     next_daily_run,
     send_daily_report_if_needed,
     start_daily_report_thread,
@@ -42,7 +42,6 @@ class FakeReports:
 class FakeMessenger:
     def __init__(self) -> None:
         self.replies: list[tuple[str, str, BotReply]] = []
-        self.texts: list[tuple[str, str, str]] = []
 
     def send_reply(
         self,
@@ -53,9 +52,25 @@ class FakeMessenger:
         self.replies.append((receive_id_type, receive_id, reply))
         return True
 
-    def send_text(self, receive_id_type: str, receive_id: str, text: str) -> bool:
-        self.texts.append((receive_id_type, receive_id, text))
-        return True
+
+class FakeWatchCards:
+    def build_new_models_card(self, models) -> BotReply:
+        return BotReply.interactive(
+            {
+                "schema": "2.0",
+                "body": {
+                    "elements": [
+                        {
+                            "tag": "markdown",
+                            "content": f"{len(models)} new models",
+                        }
+                    ]
+                },
+            }
+        )
+
+    def open_management_card(self) -> BotReply:
+        return BotReply.interactive({"schema": "2.0", "body": {"elements": []}})
 
 
 def base_env(tmp_path: Path) -> dict[str, str]:
@@ -115,30 +130,73 @@ def test_daily_report_skips_when_no_new_models() -> None:
     reports = FakeReports(new_count=0)
     messenger = FakeMessenger()
 
-    sent = send_daily_report_if_needed(reports, messenger, "chat_id", "chat-id")
+    sent = send_daily_report_if_needed(
+        reports,
+        FakeWatchCards(),
+        messenger,
+        "chat_id",
+        "chat-id",
+    )
 
     assert sent is False
     assert reports.calls == 1
     assert messenger.replies == []
-    assert messenger.texts == []
 
 
-def test_daily_report_sends_image_and_watch_prompt_for_new_models() -> None:
+def test_daily_report_sends_image_and_quick_card_for_new_models() -> None:
     reports = FakeReports(new_count=2)
     messenger = FakeMessenger()
 
-    sent = send_daily_report_if_needed(reports, messenger, "chat_id", "chat-id")
+    sent = send_daily_report_if_needed(
+        reports,
+        FakeWatchCards(),
+        messenger,
+        "chat_id",
+        "chat-id",
+    )
 
     assert sent is True
     assert messenger.replies == [
-        ("chat_id", "chat-id", BotReply.image(b"daily report"))
+        ("chat_id", "chat-id", BotReply.image(b"daily report")),
+        (
+            "chat_id",
+            "chat-id",
+            BotReply.interactive(
+                {
+                    "schema": "2.0",
+                    "body": {
+                        "elements": [
+                            {
+                                "tag": "markdown",
+                                "content": "2 new models",
+                            }
+                        ]
+                    },
+                }
+            ),
+        ),
     ]
-    assert messenger.texts == [("chat_id", "chat-id", WATCH_OPERATION_PROMPT)]
 
 
 def test_daily_report_thread_is_not_started_without_target(tmp_path: Path) -> None:
     config = load_config(environ=base_env(tmp_path))
 
-    thread = start_daily_report_thread(config, FakeReports(0), FakeMessenger())
+    thread = start_daily_report_thread(
+        config,
+        FakeReports(0),
+        FakeWatchCards(),
+        FakeMessenger(),
+    )
 
     assert thread is None
+
+
+def test_event_dispatcher_registers_card_action_callback() -> None:
+    handler = build_event_handler(
+        FakeReports(0),
+        FakeWatchCards(),
+        FakeMessenger(),
+        120,
+    )
+
+    assert "p2.card.action.trigger" in handler._callback_processor_map

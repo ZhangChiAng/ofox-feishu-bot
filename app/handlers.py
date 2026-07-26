@@ -11,11 +11,16 @@ from typing import Any
 import lark_oapi as lark
 from lark_oapi.api.application.v6 import P2ApplicationBotMenuV6
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
+from lark_oapi.event.callback.model.p2_card_action_trigger import (
+    P2CardActionTrigger,
+    P2CardActionTriggerResponse,
+)
 
 from app.commands import build_reply_for_menu_event, build_reply_for_text
 from app.feishu_client import FeishuMessenger
 from app.replies import BotReply
 from app.reports import ReportService
+from app.watch_cards import CardActionResult, WatchCardService
 
 
 logger = logging.getLogger(__name__)
@@ -172,6 +177,7 @@ def handle_message_payload(
 def handle_menu_event(
     data: P2ApplicationBotMenuV6,
     reports: ReportService,
+    watch_cards: WatchCardService,
     messenger: FeishuMessenger,
     *,
     deduplicator: MessageDeduplicator | None = None,
@@ -182,12 +188,14 @@ def handle_menu_event(
     Args:
         data: SDK event object for ``application.bot.menu_v6``.
         reports: Report builder used by menu handlers.
+        watch_cards: Interactive watch-card service used by the menu.
         messenger: Feishu message sender.
     """
 
     handle_menu_payload(
         _event_to_dict(data),
         reports,
+        watch_cards,
         messenger,
         deduplicator=deduplicator,
         max_message_age_seconds=max_message_age_seconds,
@@ -197,6 +205,7 @@ def handle_menu_event(
 def handle_menu_payload(
     raw: dict[str, Any],
     reports: ReportService,
+    watch_cards: WatchCardService,
     messenger: FeishuMessenger,
     *,
     deduplicator: MessageDeduplicator | None = None,
@@ -207,6 +216,7 @@ def handle_menu_payload(
     Args:
         raw: JSON-like event payload from Feishu.
         reports: Report builder used to answer menu actions.
+        watch_cards: Interactive watch-card service used by the menu.
         messenger: Feishu message sender.
     """
 
@@ -268,7 +278,7 @@ def handle_menu_payload(
         logger.exception("Send menu acknowledgment failed")
 
     try:
-        reply = build_reply_for_menu_event(event_key, reports)
+        reply = build_reply_for_menu_event(event_key, reports, watch_cards)
     except Exception:
         # Menu replies are generated synchronously, so report failures as chat text.
         logger.exception("Build menu reply failed")
@@ -278,6 +288,75 @@ def handle_menu_payload(
         messenger.send_reply(receive_id_type, receive_id, reply)
     except Exception:
         logger.exception("Handle menu event failed")
+
+
+def handle_card_action_event(
+    data: P2CardActionTrigger,
+    watch_cards: WatchCardService,
+    *,
+    deduplicator: MessageDeduplicator | None = None,
+) -> P2CardActionTriggerResponse:
+    """Handles a typed ``card.action.trigger`` callback."""
+
+    return handle_card_action_payload(
+        _event_to_dict(data),
+        watch_cards,
+        deduplicator=deduplicator,
+    )
+
+
+def handle_card_action_payload(
+    raw: dict[str, Any],
+    watch_cards: WatchCardService,
+    *,
+    deduplicator: MessageDeduplicator | None = None,
+) -> P2CardActionTriggerResponse:
+    """Handles a decoded card action and returns a raw replacement card."""
+
+    logger.info(
+        "Received card.action.trigger: %s",
+        json.dumps(raw, ensure_ascii=False),
+    )
+    event_id = _get_header_event_id(raw)
+    event = raw.get("event", {})
+    action = event.get("action", {}) if isinstance(event, dict) else {}
+    value = action.get("value") if isinstance(action, dict) else None
+    form_value = action.get("form_value") if isinstance(action, dict) else None
+
+    try:
+        if deduplicator and deduplicator.check_and_mark_seen(event_id):
+            result = watch_cards.render_duplicate_action(
+                value,
+                form_value=form_value,
+            )
+        else:
+            result = watch_cards.handle_action(
+                value,
+                form_value=form_value,
+            )
+    except Exception:
+        # Card callbacks have a short deadline, so always return a renderable result.
+        logger.exception("Handle card action failed, event_id=%s", event_id)
+        result = watch_cards.handle_action(None)
+
+    return _card_action_response(result)
+
+
+def _card_action_response(result: CardActionResult) -> P2CardActionTriggerResponse:
+    """Converts an internal card result to the SDK callback response."""
+
+    return P2CardActionTriggerResponse(
+        {
+            "toast": {
+                "type": result.toast_type,
+                "content": result.toast,
+            },
+            "card": {
+                "type": "raw",
+                "data": result.card,
+            },
+        }
+    )
 
 
 def _event_to_dict(data: Any) -> dict[str, Any]:

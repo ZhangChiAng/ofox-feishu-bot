@@ -13,21 +13,20 @@ from lark_oapi import ws
 
 from app.config import AppConfig, load_config
 from app.feishu_client import FeishuMessenger, build_message_client
-from app.handlers import MessageDeduplicator, handle_menu_event, handle_message_event
+from app.handlers import (
+    MessageDeduplicator,
+    handle_card_action_event,
+    handle_menu_event,
+    handle_message_event,
+)
 from app.ofox_client import OfoxClient
 from app.report_rendering import PillowReportRenderer
 from app.reports import ReportService
 from app.repository import ModelRepository
+from app.watch_cards import WatchCardService
 
 
 logger = logging.getLogger(__name__)
-WATCH_OPERATION_PROMPT = (
-    "发现新增模型。可使用以下命令维护关注列表：\n"
-    "watch add <模型名称>\n"
-    "watch remove <模型名称>\n"
-    "watch list\n"
-    "watch clear"
-)
 
 
 def main() -> None:
@@ -37,11 +36,14 @@ def main() -> None:
     setup_logging(config.log_level)
 
     logger.info("Starting Feishu websocket worker")
+    source = OfoxClient(config.ofox_models_api_url)
+    repository = ModelRepository(config.ofox_db_path)
     reports = ReportService(
-        OfoxClient(config.ofox_models_api_url),
-        ModelRepository(config.ofox_db_path),
+        source,
+        repository,
         PillowReportRenderer(config.chinese_font_path),
     )
+    watch_cards = WatchCardService(source, repository)
     messenger = FeishuMessenger(
         build_message_client(
             config.feishu_app_id,
@@ -49,11 +51,12 @@ def main() -> None:
             log_level=to_lark_log_level(config.log_level),
         )
     )
-    start_daily_report_thread(config, reports, messenger)
+    start_daily_report_thread(config, reports, watch_cards, messenger)
 
-    # Wire dependencies once so callbacks stay small and side-effect free.
+    # Wire dependencies once so websocket callbacks stay small and synchronous.
     event_handler = build_event_handler(
         reports,
+        watch_cards,
         messenger,
         config.feishu_message_max_age_seconds,
     )
@@ -77,6 +80,7 @@ def setup_logging(level: str) -> None:
 
 def build_event_handler(
     reports: ReportService,
+    watch_cards: WatchCardService,
     messenger: FeishuMessenger,
     max_message_age_seconds: int,
 ) -> lark.EventDispatcherHandler:
@@ -84,6 +88,7 @@ def build_event_handler(
 
     Args:
         reports: Report service captured by event callbacks.
+        watch_cards: Interactive watch-card service captured by callbacks.
         messenger: Feishu messenger captured by event callbacks.
         max_message_age_seconds: Maximum accepted age for message callbacks.
 
@@ -107,9 +112,17 @@ def build_event_handler(
             lambda data: handle_menu_event(
                 data,
                 reports,
+                watch_cards,
                 messenger,
                 deduplicator=deduplicator,
                 max_message_age_seconds=max_message_age_seconds,
+            )
+        )
+        .register_p2_card_action_trigger(
+            lambda data: handle_card_action_event(
+                data,
+                watch_cards,
+                deduplicator=deduplicator,
             )
         )
         .build()
@@ -141,6 +154,7 @@ def build_ws_client(
 def start_daily_report_thread(
     config: AppConfig,
     reports: ReportService,
+    watch_cards: WatchCardService,
     messenger: FeishuMessenger,
 ) -> threading.Thread | None:
     """Starts the proactive daily report thread when a target is configured."""
@@ -157,6 +171,7 @@ def start_daily_report_thread(
             config.feishu_report_receive_id_type,
             config.feishu_report_receive_id,
             reports,
+            watch_cards,
             messenger,
         ),
         daemon=True,
@@ -177,6 +192,7 @@ def daily_report_loop(
     receive_id_type: str,
     receive_id: str,
     reports: ReportService,
+    watch_cards: WatchCardService,
     messenger: FeishuMessenger,
     *,
     stop_event: threading.Event | None = None,
@@ -194,6 +210,7 @@ def daily_report_loop(
         try:
             send_daily_report_if_needed(
                 reports,
+                watch_cards,
                 messenger,
                 receive_id_type,
                 receive_id,
@@ -224,6 +241,7 @@ def next_daily_run(
 
 def send_daily_report_if_needed(
     reports: ReportService,
+    watch_cards: WatchCardService,
     messenger: FeishuMessenger,
     receive_id_type: str,
     receive_id: str,
@@ -231,7 +249,7 @@ def send_daily_report_if_needed(
     """Sends the model report only when a sync detects new models.
 
     Returns:
-        ``True`` when both the image report and text prompt were attempted,
+        ``True`` when both the image report and quick-action card were attempted,
         otherwise ``False``.
     """
 
@@ -241,7 +259,11 @@ def send_daily_report_if_needed(
         return False
 
     messenger.send_reply(receive_id_type, receive_id, payload.reply)
-    messenger.send_text(receive_id_type, receive_id, WATCH_OPERATION_PROMPT)
+    messenger.send_reply(
+        receive_id_type,
+        receive_id,
+        watch_cards.build_new_models_card(payload.sync_result.new_models),
+    )
     return True
 
 

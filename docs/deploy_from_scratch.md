@@ -64,15 +64,17 @@ im.message.receive_v1
 application.bot.menu_v6
 ```
 
-## 配置机器人菜单
-
-机器人菜单使用“推送事件”。
+3. 在回调配置中使用长连接订阅：
 
 ```text
-菜单名：帮助
-响应动作：推送事件
-event_key：help
+card.action.trigger
+```
 
+## 配置机器人菜单
+
+配置以下三个顶级机器人菜单，均使用“推送事件”。
+
+```text
 菜单名：可用提供商
 响应动作：推送事件
 event_key：list_providers
@@ -80,6 +82,10 @@ event_key：list_providers
 菜单名：模型报告
 响应动作：推送事件
 event_key：send_report
+
+菜单名：关注管理
+响应动作：推送事件
+event_key：manage_watches
 ```
 
 完成权限、事件和菜单配置后，在“版本管理与发布”中发布应用。
@@ -171,23 +177,19 @@ Starting Feishu websocket worker
 
 ```text
 provider deepseek
-watch add DeepSeek V4 Flash
-watch list
 ```
 
 预期：
 
 - `provider openai` 返回飞书图片消息，图片内包含提供商摘要、模型表格和价格列。
-- `watch add <模型名称>` 添加一个当前 catalog 中存在的模型名称到全局关注列表。
-- `watch list` 返回飞书图片消息，图片内包含关注模型表格。
 
-点击机器人菜单“帮助”“可用提供商”“模型报告”，均应收到机器人回复。
+点击机器人菜单“可用提供商”“模型报告”“关注管理”，均应收到机器人回复。
 
 预期：
 
-- “帮助”返回短文本可用命令。
 - “可用提供商”返回飞书图片，包含提供商/模型数表格和查询示例。
 - “模型报告”返回飞书图片，包含摘要表、新增模型表和关注模型表。
+- “关注管理”返回交互卡片，可逐项关注、取消、筛选、分页和清空全局共享列表。
 - 首次运行会创建 SQLite 基线，摘要表状态列显示"首次运行，已建立本地模型基线"，新增模型行显示"首次运行"。
 
 ## systemd 示例
