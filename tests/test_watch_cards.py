@@ -10,6 +10,7 @@ from app.repository import ModelRepository
 from app.watch_cards import (
     ACTION_ADD_PAGE,
     ACTION_CLEAR,
+    ACTION_CLOSE,
     ACTION_FILTER,
     ACTION_QUICK_PAGE,
     ACTION_UNWATCH,
@@ -95,6 +96,12 @@ def markdown_contents(card: dict[str, Any]) -> list[str]:
     ]
 
 
+def assert_forwarding_disabled(card: dict[str, Any]) -> None:
+    assert card["config"]["update_multi"] is True
+    assert card["config"]["enable_forward"] is False
+    assert card["config"]["enable_forward_interaction"] is False
+
+
 def test_management_home_empty_missing_pagination_and_clear_confirm(
     tmp_path: Path,
 ) -> None:
@@ -116,6 +123,10 @@ def test_management_home_empty_missing_pagination_and_clear_confirm(
     clear = buttons(card, "清空全部")[0]
     assert callback_value(clear)["action"] == ACTION_CLEAR
     assert clear["confirm"]["title"]["content"] == "确认清空全部关注？"
+    assert len(buttons(card, "关闭卡片")) == 1
+    assert callback_value(buttons(card, "关闭卡片")[0])["action"] == ACTION_CLOSE
+    assert "confirm" not in buttons(card, "关闭卡片")[0]
+    assert_forwarding_disabled(card)
 
     next_value = callback_value(buttons(card, "下一页")[0])
     next_page = cards.handle_action(next_value)
@@ -164,6 +175,9 @@ def test_add_page_combines_provider_keyword_sorting_and_pagination(
     assert "升级飞书客户端" in query_input["fallback"]["text"]["content"]
 
     filter_button = buttons(add.card, "筛选")[0]
+    assert len(buttons(add.card, "关闭卡片")) == 1
+    assert callback_value(buttons(add.card, "关闭卡片")[0])["action"] == ACTION_CLOSE
+    assert_forwarding_disabled(add.card)
     filtered = cards.handle_action(
         callback_value(filter_button),
         form_value={"provider": "openai", "query": "GPT"},
@@ -285,7 +299,10 @@ def test_quick_card_has_only_per_model_actions_and_survives_context_expiry(
         ACTION_WATCH,
         ACTION_UNWATCH,
         ACTION_QUICK_PAGE,
+        ACTION_CLOSE,
     }
+    assert len(buttons(card, "关闭卡片")) == 1
+    assert_forwarding_disabled(card)
 
     next_page = cards.handle_action(callback_value(buttons(card, "下一页")[0]))
     assert next_page.toast is None
@@ -297,6 +314,96 @@ def test_quick_card_has_only_per_model_actions_and_survives_context_expiry(
     assert expired.toast_type == "warning"
     assert "上下文已过期" in expired.toast
     assert watch_value["model_name"] in repository.list_watched_models()
+
+
+def test_close_from_each_view_is_idempotent_and_blocks_old_actions(
+    tmp_path: Path,
+) -> None:
+    cards, repository, _ = make_service(
+        tmp_path,
+        [model("openai/existing"), model("openai/new")],
+    )
+    repository.add_watched_model("openai/existing")
+
+    home = cards.open_management_card().content
+    clear_value = callback_value(buttons(home, "清空全部")[0])
+    home_close_value = callback_value(buttons(home, "关闭卡片")[0])
+    closed_home = cards.handle_action(home_close_value)
+    closed_home_again = cards.handle_action(home_close_value)
+    old_home_action = cards.handle_action(clear_value)
+
+    assert closed_home.toast_type == "success"
+    assert closed_home.toast == "卡片已关闭"
+    assert closed_home.card["header"]["template"] == "grey"
+    assert markdown_contents(closed_home.card) == [
+        "关注管理卡片已关闭，可从机器人菜单重新打开。"
+    ]
+    assert buttons(closed_home.card) == []
+    assert closed_home_again.card == closed_home.card
+    assert old_home_action.card == closed_home.card
+    assert repository.list_watched_models() == ["openai/existing"]
+
+    second_home = cards.open_management_card().content
+    add = cards.handle_action(callback_value(buttons(second_home, "添加模型")[0]))
+    watch_value = callback_value(buttons(add.card, "关注")[0])
+    add_close_value = callback_value(buttons(add.card, "关闭卡片")[0])
+    closed_add = cards.handle_action(add_close_value)
+    duplicate_old_add_action = cards.render_duplicate_action(watch_value)
+
+    assert markdown_contents(closed_add.card) == [
+        "关注管理卡片已关闭，可从机器人菜单重新打开。"
+    ]
+    assert buttons(closed_add.card) == []
+    assert duplicate_old_add_action.card == closed_add.card
+    assert repository.list_watched_models() == ["openai/existing"]
+
+    quick = cards.build_new_models_card([model("openai/new")]).content
+    quick_watch_value = callback_value(buttons(quick, "关注")[0])
+    quick_close_value = callback_value(buttons(quick, "关闭卡片")[0])
+    closed_quick = cards.handle_action(quick_close_value)
+    old_quick_action = cards.handle_action(quick_watch_value)
+
+    assert closed_quick.toast_type == "success"
+    assert closed_quick.toast == "卡片已关闭"
+    assert closed_quick.card["header"]["template"] == "grey"
+    assert markdown_contents(closed_quick.card) == ["新增模型快捷关注卡片已关闭。"]
+    assert buttons(closed_quick.card) == []
+    assert old_quick_action.card == closed_quick.card
+    assert_forwarding_disabled(closed_quick.card)
+    assert repository.list_watched_models() == ["openai/existing"]
+
+
+def test_expired_context_can_close_and_then_rejects_old_actions(tmp_path: Path) -> None:
+    clock = MutableClock()
+    cards, repository, _ = make_service(
+        tmp_path,
+        [model("openai/new")],
+        clock=clock,
+    )
+    repository.add_watched_model("openai/existing")
+
+    home = cards.open_management_card().content
+    clear_value = callback_value(buttons(home, "清空全部")[0])
+    home_close_value = callback_value(buttons(home, "关闭卡片")[0])
+    quick = cards.build_new_models_card([model("openai/new")]).content
+    watch_value = callback_value(buttons(quick, "关注")[0])
+    quick_close_value = callback_value(buttons(quick, "关闭卡片")[0])
+
+    clock.now += 24 * 60 * 60 + 1
+    expired_home_close = cards.handle_action(home_close_value)
+    expired_quick_close = cards.handle_action(quick_close_value)
+
+    assert expired_home_close.toast == "卡片已关闭"
+    assert markdown_contents(expired_home_close.card) == [
+        "关注管理卡片已关闭，可从机器人菜单重新打开。"
+    ]
+    assert expired_quick_close.toast == "卡片已关闭"
+    assert markdown_contents(expired_quick_close.card) == [
+        "新增模型快捷关注卡片已关闭。"
+    ]
+    assert cards.handle_action(clear_value).card == expired_home_close.card
+    assert cards.handle_action(watch_value).card == expired_quick_close.card
+    assert repository.list_watched_models() == ["openai/existing"]
 
 
 def test_card_action_callback_returns_raw_card_and_deduplicates_event(

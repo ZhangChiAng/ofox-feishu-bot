@@ -30,6 +30,7 @@ ACTION_WATCH = "watch"
 ACTION_UNWATCH = "unwatch"
 ACTION_CLEAR = "clear"
 ACTION_QUICK_PAGE = "quick_page"
+ACTION_CLOSE = "close"
 ACTION_FIELDS = {
     "action",
     "context_id",
@@ -47,6 +48,7 @@ SUPPORTED_ACTIONS = {
     ACTION_UNWATCH,
     ACTION_CLEAR,
     ACTION_QUICK_PAGE,
+    ACTION_CLOSE,
 }
 
 
@@ -81,6 +83,7 @@ class _CardContext:
     provider: str = ""
     query: str = ""
     page: int = 1
+    closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +183,12 @@ class WatchCardService:
         context = self._get_context(parsed.context_id)
         if context is None:
             return self._handle_expired_context(parsed)
+        if context.closed:
+            return self._closed_result(context.kind)
+
+        if parsed.action == ACTION_CLOSE:
+            self._mark_context_closed(context)
+            return self._closed_result(context.kind)
 
         result = self._validate_context_action(context, parsed)
         if result is not None:
@@ -256,9 +265,13 @@ class WatchCardService:
         with self._action_lock:
             context = self._get_context(parsed.context_id)
             if context is None:
+                if parsed.action == ACTION_CLOSE:
+                    return self._handle_expired_context(parsed)
                 return self._invalid_result(
                     "卡片上下文已过期，请从机器人菜单重新打开。"
                 )
+            if context.closed:
+                return self._closed_result(context.kind)
             return self._result(
                 self._build_current_card(context),
                 "info",
@@ -459,8 +472,14 @@ class WatchCardService:
         return None
 
     def _handle_expired_context(self, action: _ActionValue) -> CardActionResult:
-        """Keeps explicit quick-card model actions idempotent after expiry."""
+        """Handles an action whose original card context has expired."""
 
+        if action.action == ACTION_CLOSE:
+            kind: Literal["management", "quick"] = (
+                "quick" if action.context_id.startswith("quick:") else "management"
+            )
+            self._store_closed_context(action.context_id, kind)
+            return self._closed_result(kind)
         if action.context_id.startswith("quick:") and action.action in {
             ACTION_WATCH,
             ACTION_UNWATCH,
@@ -481,6 +500,8 @@ class WatchCardService:
     def _build_current_card(self, context: _CardContext) -> dict[str, Any]:
         """Renders the active view and clamps pages after a state mutation."""
 
+        if context.closed:
+            return self._closed_card(context.kind)
         if context.kind == "quick":
             context.page = self._clamp_page(
                 context.page,
@@ -574,6 +595,7 @@ class WatchCardService:
                 ]
             )
         )
+        elements.append(self._close_button_row(context))
         return _card("关注管理", elements)
 
     def _build_add_card(self, context: _CardContext) -> dict[str, Any]:
@@ -680,6 +702,7 @@ class WatchCardService:
                 ]
             )
         )
+        elements.append(self._close_button_row(context))
         return _card("添加关注模型", elements)
 
     def _build_quick_card(self, context: _CardContext) -> dict[str, Any]:
@@ -710,7 +733,24 @@ class WatchCardService:
                 total=len(models),
             )
         )
+        elements.append(self._close_button_row(context))
         return _card("新增模型快捷关注", elements, template="green")
+
+    def _close_button_row(self, context: _CardContext) -> dict[str, Any]:
+        """Builds the unconfirmed close control shared by active cards."""
+
+        return _button_row(
+            [
+                _button(
+                    "关闭卡片",
+                    self._action_value(
+                        ACTION_CLOSE,
+                        context,
+                        page=context.page,
+                    ),
+                )
+            ]
+        )
 
     def _model_row(
         self,
@@ -894,6 +934,62 @@ class WatchCardService:
 
         return self._result(self._expired_card(), "error", message)
 
+    def _store_closed_context(
+        self,
+        context_id: str,
+        kind: Literal["management", "quick"],
+    ) -> None:
+        """Stores a fresh tombstone when an expired card is closed."""
+
+        context = _CardContext(
+            context_id=context_id,
+            kind=kind,
+            catalog=(),
+            catalog_available=False,
+            expires_at=self._clock() + self._context_ttl(kind),
+            view="home" if kind == "management" else "quick",
+            closed=True,
+        )
+        with self._lock:
+            self._remove_expired_locked()
+            self._contexts[context_id] = context
+
+    def _mark_context_closed(self, context: _CardContext) -> None:
+        """Marks an active context closed and refreshes its tombstone lifetime."""
+
+        with self._lock:
+            # Reinsert under the cache lock if expiry cleanup raced with the click.
+            context.closed = True
+            context.expires_at = self._clock() + self._context_ttl(context.kind)
+            self._contexts[context.context_id] = context
+
+    def _context_ttl(self, kind: Literal["management", "quick"]) -> int:
+        """Returns the configured lifetime for one card kind."""
+
+        if kind == "quick":
+            return self.quick_context_ttl_seconds
+        return self.context_ttl_seconds
+
+    def _closed_result(
+        self,
+        kind: Literal["management", "quick"],
+    ) -> CardActionResult:
+        """Returns the idempotent replacement shown after a card is closed."""
+
+        return self._result(self._closed_card(kind), "success", "卡片已关闭")
+
+    @staticmethod
+    def _closed_card(kind: Literal["management", "quick"]) -> dict[str, Any]:
+        """Builds the compact, non-interactive closed state."""
+
+        if kind == "quick":
+            title = "新增模型快捷关注"
+            message = "新增模型快捷关注卡片已关闭。"
+        else:
+            title = "关注管理"
+            message = "关注管理卡片已关闭，可从机器人菜单重新打开。"
+        return _card(title, [_markdown(message)], template="grey")
+
     @staticmethod
     def _expired_card() -> dict[str, Any]:
         """Builds a safe replacement when action context cannot be used."""
@@ -917,7 +1013,8 @@ def _card(
         "schema": "2.0",
         "config": {
             "update_multi": True,
-            "enable_forward_interaction": True,
+            "enable_forward": False,
+            "enable_forward_interaction": False,
             "width_mode": "fill",
         },
         "header": {
